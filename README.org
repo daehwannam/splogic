@@ -1,0 +1,8 @@
+
+* Semantic Parsing Logic Library
+
+** Project
+Initialize the project by:
+#+begin_src sh
+git submodule update --init --recursive
+#+end_src

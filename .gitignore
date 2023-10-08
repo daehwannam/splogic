@@ -1,0 +1,13 @@
+
+# temporary files
+_tmp_*
+
+# emacs temporary files
+*~
+\#*#
+
+# emacs directory local variables file
+/.dir-locals.el
+
+# python temporary file
+*.pyc

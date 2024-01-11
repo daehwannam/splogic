@@ -6,6 +6,7 @@ from abc import ABCMeta, abstractmethod
 import copy
 import inspect
 from functools import lru_cache
+from enum import Enum
 
 from dhnamlib.pylib.structure import TreeStructure
 from dhnamlib.pylib.iteration import any_not_none, flatten, split_by_indices, chainelems, lastelem, not_none_valued_pairs
@@ -572,6 +573,8 @@ def make_program_tree_cls(formalism: Formalism, name=None, opening_cache_size=10
             if self.is_opened():
                 opened_tree, children = self, tuple()
             else:
+                if not hasattr(self.prev, 'get_opened_tree_children'):
+                    breakpoint()
                 opened_tree, siblings = self.prev.get_opened_tree_children()
                 children = siblings + (self,)
             return opened_tree, children
@@ -823,10 +826,15 @@ class InvalidCandidateActionError(Exception):
     pass
 
 
-def make_search_state_cls(grammar, name=None, using_arg_candidate=True, using_arg_filter=False, ids_to_mask_fn=None):
+def make_search_state_cls(
+        grammar, name=None, using_arg_candidate=True, using_arg_filter=False, ids_to_mask_fn=None,
+        extra_special_states=[]
+):
     class BasicSearchState(SearchState):
         interface = Interface(SearchState)
         _mask_cache = dict()
+
+        SpecialState = Enum('SpecialState', tuple(chain(['INVALID', ], extra_special_states)))
 
         @staticmethod
         @interface.implement
@@ -900,6 +908,9 @@ def make_search_state_cls(grammar, name=None, using_arg_candidate=True, using_ar
                 candidate_mask = ids_to_mask_fn(action_ids)
 
             return candidate_mask
+
+    for special_state in BasicSearchState.SpecialState:
+        setattr(BasicSearchState, special_state.name, special_state)
 
     if name is not None:
         BasicSearchState.__name__ = BasicSearchState.__qualname__ = name

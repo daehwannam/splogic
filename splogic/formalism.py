@@ -573,8 +573,6 @@ def make_program_tree_cls(formalism: Formalism, name=None, opening_cache_size=10
             if self.is_opened():
                 opened_tree, children = self, tuple()
             else:
-                if not hasattr(self.prev, 'get_opened_tree_children'):
-                    breakpoint()
                 opened_tree, siblings = self.prev.get_opened_tree_children()
                 children = siblings + (self,)
             return opened_tree, children

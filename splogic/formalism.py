@@ -95,7 +95,7 @@ class Action:
                 yield expr
             else:
                 spans, piece_keys = zip(*iter_span_piece_key_pairs(replace_brackets_with_symbols(expr)))
-                splits = split_by_indices(expr, chainelems(spans))
+                splits = split_by_indices(expr, chainelems(spans), including_end_index=False)
                 for idx, split in enumerate(splits):
                     if idx % 2 == 1:
                         yield Action.PieceKey(int(piece_keys[idx // 2]))

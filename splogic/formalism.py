@@ -832,7 +832,7 @@ def make_search_state_cls(
         interface = Interface(SearchState)
         _mask_cache = dict()
 
-        SpecialState = Enum('SpecialState', tuple(chain(['INVALID', ], extra_special_states)))
+        SpecialState = Enum('SpecialState', tuple(chain(['INVALID', 'END'], extra_special_states)))
 
         @staticmethod
         @interface.implement

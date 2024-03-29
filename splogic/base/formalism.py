@@ -5,12 +5,13 @@ from typing import List, Dict
 from abc import ABCMeta, abstractmethod
 import copy
 import inspect
-from functools import lru_cache
+from functools import lru_cache, cache
 from enum import Enum
 
 from dhnamlib.pylib.structure import TreeStructure
 from dhnamlib.pylib.iteration import any_not_none, flatten, split_by_indices, chainelems, lastelem, not_none_valued_pairs
-from dhnamlib.pylib.klass import Interface
+# from dhnamlib.pylib.klass import Interface
+from dhnamlib.pylib.klass import subclass, implement, override
 # from dhnamlib.pylib.klass import abstractfunction
 from dhnamlib.pylib.decoration import deprecated, unnecessary, construct, keyed_cache
 from dhnamlib.pylib.structure import bidict, DuplicateValueError
@@ -563,11 +564,12 @@ class ProgramTree(TreeStructure, metaclass=ABCMeta):
         return form_to_str(get_expr_form(self))
 
 
+@subclass
 def make_program_tree_cls(formalism: Formalism, name=None, opening_cache_size=10000):
     class NewProgramTree(ProgramTree):
-        interface = Interface(ProgramTree)
+        # interface = Interface(ProgramTree)
 
-        @interface.override
+        @override
         @lru_cache(maxsize=opening_cache_size)
         def get_opened_tree_children(self):
             if self.is_opened():
@@ -577,7 +579,7 @@ def make_program_tree_cls(formalism: Formalism, name=None, opening_cache_size=10
                 children = siblings + (self,)
             return opened_tree, children
 
-        @interface.implement
+        @implement
         @staticmethod
         def get_formalism():
             return formalism
@@ -828,56 +830,57 @@ def make_search_state_cls(
         grammar, name=None, using_arg_candidate=True, using_arg_filter=False, ids_to_mask_fn=None,
         extra_special_states=[]
 ):
+    @subclass
     class BasicSearchState(SearchState):
-        interface = Interface(SearchState)
+        # interface = Interface(SearchState)
         _mask_cache = dict()
 
         SpecialState = Enum('SpecialState', tuple(chain(['INVALID', 'END'], extra_special_states)))
 
         @staticmethod
-        @interface.implement
+        @implement
         def get_program_tree_cls():
             return grammar.program_tree_cls
 
         @classmethod
-        @interface.implement
+        @implement
         def get_using_arg_candidate(cls):
             return using_arg_candidate
 
         @classmethod
-        @interface.implement
+        @implement
         def get_using_arg_filter(cls):
             return using_arg_filter
 
-        @interface.implement
+        @implement
         def get_initial_attrs(self):
             return dict()
 
-        @interface.implement
+        @implement
         def get_start_action(self):
             return grammar.start_action
 
-        @interface.implement
+        @implement
         def get_updated_attrs(self, tree):
             return dict()
 
         @deprecated
-        @interface.implement
+        @implement
         def get_type_to_actions_dicts(self):
             return grammar.get_type_to_actions_dicts()
 
-        @interface.implement
+        @implement
         def get_type_to_action_ids_dicts(self):
             return grammar.get_type_to_action_ids_dicts()
 
-        @interface.implement
+        @implement
         @classmethod
-        @lru_cache(maxsize=None)
+        @cache
         def get_all_token_id_set(cls):
             all_token_id_set = set(grammar.iter_all_token_ids())
             return all_token_id_set
 
-        @interface.implement
+        @implement
         def get_name_to_id_dicts(self):
             return grammar.get_name_to_id_dicts()
 
@@ -914,9 +917,3 @@ def make_search_state_cls(
         BasicSearchState.__name__ = BasicSearchState.__qualname__ = name
 
     return BasicSearchState
-
-
-class Compiler(metaclass=ABCMeta):
-    @abstractmethod
-    def compile_tree(self, tree):
-        '''Convert a tree to an executable'''

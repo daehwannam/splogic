@@ -6,3 +6,6 @@ Initialize the project by:
 #+begin_src sh
 git submodule update --init --recursive
 #+end_src
+
+** Required packages
+- pygtrie

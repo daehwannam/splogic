@@ -3,6 +3,7 @@ from functools import lru_cache
 from itertools import chain
 
 from hissp.munger import munge, demunge
+from hissp.reader import SoftSyntaxError
 
 from dhnamlib.pylib.lisp import (remove_comments, replace_prefixed_parens, is_keyword, keyword_to_symbol)
 from dhnamlib.pylib.iteration import merge_dicts, chainelems
@@ -13,10 +14,11 @@ from dhnamlib.pylib.klass import abstractfunction
 
 from dhnamlib.hissplib.macro import prelude, load_macro
 from dhnamlib.hissplib.module import import_lissp
-from dhnamlib.hissplib.compile import eval_lissp
+from dhnamlib.hissplib.compile import eval_lissp, lissp_to_hissp
 from dhnamlib.hissplib.expression import remove_backquoted_symbol_prefixes  # imported for eval_lissp
 from dhnamlib.hissplib.operation import import_operators
 from dhnamlib.hissplib.decoration import parse_hy_args, hy_function
+
 
 from .formalism import Formalism, Action, MetaAction
 
@@ -45,18 +47,22 @@ class Grammar:
         self.is_non_conceptual_type = is_non_conceptual_type
         self.added_actions = []
 
-        # base actions
+        # Base actions
         self._name_to_base_action_dict = formalism.make_name_to_action_dict(self.base_actions)
         self._meta_name_to_meta_action_dict = formalism.make_name_to_action_dict(meta_actions, meta=True)
         self._type_to_base_actions_dict = formalism.make_type_to_actions_dict(
             self.base_actions, super_types_dict, inferencing_subtypes=inferencing_subtypes)
         self.start_action.id = self._start_action_id
+
+        # `_set_action_ids` depends on `get_name_to_id_dicts`,
+        # which should be implemented in a sub-class.
         self._set_action_ids(self.base_actions)
+
         self._id_to_base_action_dict = formalism.make_id_to_action_dict(self.base_actions)
         self._type_to_base_action_ids_dict = formalism.make_type_to_action_ids_dict(
             self.base_actions, super_types_dict, inferencing_subtypes=inferencing_subtypes)
 
-        # added actions
+        # Added actions
         self._name_to_added_action_dict = dict()
         self._type_to_added_actions_dict = dict()
         self._type_to_added_action_ids_dict = dict()
@@ -74,6 +80,14 @@ class Grammar:
     @property
     def reduce_action(self):
         return self.formalism.reduce_action
+
+    @property
+    def reduce_action_id(self):
+        return self.get_reduce_action_id()
+
+    @abstractfunction
+    def get_reduce_action_id(self):
+        pass
 
     def name_to_action(self, name):
         return self.formalism.name_to_action(name, self.get_name_to_action_dicts())
@@ -328,7 +342,7 @@ def read_grammar(file_path, *, formalism=None, grammar_cls=Grammar):
         actions = []
         start_actions = []
         meta_actions = []
-        register = Register(strategy='conditional')
+        register = SymbolicRegister(strategy='conditional')
 
         is_non_conceptual_type = make_is_non_conceptual_type(types, conceptual_types)
 
@@ -363,6 +377,30 @@ def read_grammar(file_path, *, formalism=None, grammar_cls=Grammar):
 
 def get_extra_ns(bindings):
     return dict([munge(k), v] for k, v in bindings)
+
+
+class SymbolicRegister(Register):
+    '''
+    Example
+    >>> register = SymbolicRegister(strategy='lazy')
+    >>> name_fn = register.retrieve(['function', 'name'])
+    >>>
+    >>> @register('(function name)')
+    ... def full_name(first, last):
+    ...     return ' '.join([first, last])
+    >>>
+    >>> print(name_fn('John', 'Smith'))
+    John Smith
+    '''
+
+    def _normalize_identifier(self, identifier):
+        if isinstance(identifier, str):
+            try:
+                identifier = lissp_to_hissp(identifier)
+            except SoftSyntaxError:
+                pass
+        return super()._normalize_identifier(identifier)
+
 
 
 if __name__ == '__main__':

@@ -39,7 +39,8 @@ class LispCompiler(Compiler):
             return program
 
 
-NO_DENOTATION = object()
+# NO_DENOTATION = object()
+NO_DENOTATION = 'NO_DENOTATION'
 
 
 def runtime_exception_handler(context):
@@ -59,9 +60,9 @@ class _InvalidProgram:
 INVALID_PROGRAM = _InvalidProgram()
 
 
-class Result(metaclass=ABCMeta):
+class ExecResult(metaclass=ABCMeta):
     '''
-    The execution result that is returned from `Executor.execute_batch`.
+    The execution result that is returned from `Executor.execute`.
     '''
 
     @abstractmethod
@@ -74,16 +75,16 @@ class Result(metaclass=ABCMeta):
 
 
 @subclass
-class InstantResult(Result):
-    # interface = Interface(Result)
+class InstantExecResult(ExecResult):
+    # interface = Interface(ExecResult)
 
-    def __init__(self, value):
-        # self._value = self.post_process(value)
-        self._value = value
+    def __init__(self, values):
+        # self._values = self.post_process(value)
+        self._values = values
 
     @implement
     def get(self):
-        return self._value
+        return self._values
 
     @implement
     def is_done(self) -> bool:
@@ -95,12 +96,12 @@ class InstantResult(Result):
 
 class Executor(metaclass=ABCMeta):
     @abstractmethod
-    def execute_batch(programs, contexts) -> Result:
+    def execute(self, programs, contexts) -> ExecResult:
         pass
 
-    @abstractmethod
-    def wait_until_all_done():
-        pass
+    # @abstractmethod
+    # def wait_until_all_done():
+    #     pass
 
 
 @subclass
@@ -109,23 +110,20 @@ class InstantExecutor(Executor):
 
     def __init__(
             self,
-            result_cls=InstantResult,
+            result_cls=InstantExecResult,
             context_wrapper=identity,
     ):
-        self.result_cls = InstantResult
+        self.result_cls = result_cls
         self.context_wrapper = context_wrapper
 
     @implement
-    def execute_batch(self, programs, contexts) -> Result:
+    def execute(self, programs, contexts) -> ExecResult:
         assert len(programs) == len(contexts)
-        results = tuple(self.result_cls(program(self.context_wrapper(context)))
-                        for program, context in zip(programs, contexts))
+        results = self.result_cls(
+            tuple(program(self.context_wrapper(context))
+                  for program, context in zip(programs, contexts)))
 
         return results
-
-    @implement
-    def wait_until_all_done():
-        pass
 
 
 @notimplemented
@@ -133,6 +131,7 @@ class AsyncExecutor(Executor):
     pass
 
 
+@notimplemented
 class ContextCreater(metaclass=ABCMeta):
     @abstractmethod
     def __call__(self, *args, **kwargs):

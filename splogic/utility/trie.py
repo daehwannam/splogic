@@ -1,19 +1,21 @@
 
 from itertools import chain
-from abc import abstractmethod
+# from abc import abstractmethod
+from abc import ABCMeta
 
-from dhnamlib.pylib.iteration import all_same
+from dhnamlib.pylib.iteration import all_same, unique
 # from dhnamlib.pylib.decoration import construct
 # from dhnamlib.pylib.klass import Interface
-from dhnamlib.pylib.klass import subclass, implement
+from dhnamlib.pylib.klass import subclass, implement, override, abstractfunction
 from dhnamlib.pylib.function import identity
+# from dhnamlib.pylib.type import typecast
 
 import pygtrie
 
 
-class Trie:
-    @abstractmethod
-    def candidate_ids(self, id_seq_prefix):
+class Trie(metaclass=ABCMeta):
+    @abstractfunction
+    def generate_candidate_ids(self, id_seq_prefix):
         pass
 
 
@@ -60,7 +62,7 @@ class SequenceTrie(Trie):
         return self._normalize_id_seq(id_seq) in self.trie
 
     @implement
-    def candidate_ids(self, id_seq_prefix, ignoring_errors=False):
+    def generate_candidate_ids(self, id_seq_prefix, ignoring_errors=False):
         # "id_seq_prefix" is a part of an entire sequence of a key
         try:
             prefix_node, path = self.trie._get_node(id_seq_prefix)
@@ -76,7 +78,7 @@ class SequenceTrie(Trie):
     def candidate_tokens(self, token_seq_prefix):
         # "id_seq_prefix" is a part of an entire sequence of a key
         id_seq_prefix = self.tokenizer.convert_tokens_to_ids(token_seq_prefix)
-        candidate_ids = self.candidate_ids(id_seq_prefix)
+        candidate_ids = self.generate_candidate_ids(id_seq_prefix)
         return self.tokenizer.convert_ids_to_tokens(candidate_ids)
 
     def id_seqs(self):
@@ -114,9 +116,8 @@ class SequenceTrie(Trie):
         return trie
 
 
+@subclass
 class DenseSpanTrie(Trie):
-    interface = Interface(Trie)
-
     def __init__(self, id_seq, end_of_seq_id):
         self.id_seq = id_seq    # id_seq does not include BOS and EOS. We also assume "add_prefix_space=True".
         self.end_of_seq_id = end_of_seq_id
@@ -126,7 +127,7 @@ class DenseSpanTrie(Trie):
             id_to_index_set.setdefault(token_id, set()).add(index)
         self.id_to_index_set = id_to_index_set
 
-    # def candidate_ids(self, id_seq_prefix, allowing_duplicates=False, sorting=True):
+    # def get_candidate_ids(self, id_seq_prefix, allowing_duplicates=False, sorting=True):
     #     candidates = self._candidate_ids(id_seq_prefix)
     #     if not allowing_duplicates:
     #         candidates = set(id_seq_prefix)
@@ -137,7 +138,7 @@ class DenseSpanTrie(Trie):
     # @construct(lambda x: sorted(set(x)))
     # @construct(set)
     @implement
-    def candidate_ids(self, id_seq_prefix):
+    def generate_candidate_ids(self, id_seq_prefix):
         if len(id_seq_prefix) == 0:
             yield from self.id_seq
         else:
@@ -163,6 +164,13 @@ class DenseSpanTrie(Trie):
 
 
 @subclass
+class NoTrie(Trie):
+    @implement
+    def generate_candidate_ids(self, id_seq_prefix):
+        return ()
+
+
+@subclass
 class MergedTrie(Trie):
     # interface = Interface(Trie)
 
@@ -171,10 +179,21 @@ class MergedTrie(Trie):
         self.preprocess = identity if allowing_duplicates else set
 
     @implement
-    def candidate_ids(self, id_seq_prefix):
-        return tuple(self.preprocess(chain(*(
-            trie.candidate_ids.candidate_ids(id_seq_prefix)
-            for trie in self.tries))))
+    def generate_candidate_ids(self, id_seq_prefix):
+        candidate_ids_tuple = tuple(
+            trie.generate_candidate_ids(id_seq_prefix)
+            for trie in self.tries)
+
+        if len(candidate_ids_tuple) == 1:
+            all_candidate_ids = unique(candidate_ids_tuple)
+        else:
+            all_candidate_ids = chain(*candidate_ids_tuple)
+
+        return tuple(self.preprocess(all_candidate_ids))
+
+        # return tuple(self.preprocess(chain(*(
+        #     trie.generate_candidate_ids(id_seq_prefix)
+        #     for trie in self.tries))))
 
 
 if __name__ == '__main__':

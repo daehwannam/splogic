@@ -99,7 +99,7 @@ def load_model_config(pretrained_model_name_or_path):
 def save_model(model, dir_path):
     filesys.touch_with_mkpdirs(os.path.join(dir_path, '.finetuned'))
     # model.save_pretrained(dir_path)
-    accelerator().save_pretrained_model(model, dir_path)
+    accelerator.save_pretrained_model(model, dir_path)
 
 
 OPTIMIZER_FILE_NAME = 'optimizer.pt'

@@ -8,14 +8,15 @@ from hissp.reader import SoftSyntaxError
 from dhnamlib.pylib.lisp import (remove_comments, replace_prefixed_parens, is_keyword, keyword_to_symbol)
 from dhnamlib.pylib.iteration import merge_dicts, chainelems
 from dhnamlib.pylib.function import starloop  # imported for eval_lissp
-from dhnamlib.pylib.decoration import Register, deprecated
-from dhnamlib.pylib.klass import abstractfunction
+from dhnamlib.pylib.decoration import MethodRegister, deprecated
+from dhnamlib.pylib.klass import abstractfunction, subclass, override
 # from dhnamlib.pylib.decoration import cache
 
 from dhnamlib.hissplib.macro import prelude, load_macro
 from dhnamlib.hissplib.module import import_lissp
 from dhnamlib.hissplib.compile import eval_lissp, lissp_to_hissp
 from dhnamlib.hissplib.expression import remove_backquoted_symbol_prefixes  # imported for eval_lissp
+from dhnamlib.hissplib.expression import demunge_recursively
 from dhnamlib.hissplib.operation import import_operators
 from dhnamlib.hissplib.decoration import parse_hy_args, hy_function
 
@@ -167,7 +168,7 @@ class Grammar:
         raise NotImplementedError
 
 
-def read_grammar(file_path, *, formalism=None, grammar_cls=Grammar):
+def read_grammar(file_path, *, formalism=None, grammar_cls=Grammar, grammar_kwargs={}):
     if formalism is None:
         formalism = Formalism()
 
@@ -365,6 +366,7 @@ def read_grammar(file_path, *, formalism=None, grammar_cls=Grammar):
             meta_actions=meta_actions,
             register=register,
             is_non_conceptual_type=is_non_conceptual_type,
+            **grammar_kwargs,
         )
 
         return grammar
@@ -379,7 +381,8 @@ def get_extra_ns(bindings):
     return dict([munge(k), v] for k, v in bindings)
 
 
-class SymbolicRegister(Register):
+@subclass
+class SymbolicRegister(MethodRegister):
     '''
     Example
     >>> register = SymbolicRegister(strategy='lazy')
@@ -393,10 +396,11 @@ class SymbolicRegister(Register):
     John Smith
     '''
 
+    @override
     def _normalize_identifier(self, identifier):
         if isinstance(identifier, str):
             try:
-                identifier = lissp_to_hissp(identifier)
+                identifier = demunge_recursively(lissp_to_hissp(identifier))
             except SoftSyntaxError:
                 pass
         return super()._normalize_identifier(identifier)

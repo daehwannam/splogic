@@ -3,7 +3,7 @@ from dhnamlib.pylib.object import ObjectCache
 from dhnamlib.pylib.lazy import LazyProxy
 
 
-object_cache = ObjectCache
+object_cache = ObjectCache()
 set_tqdm_use_initializer = object_cache.set_initializer
 
 

@@ -4,11 +4,12 @@ import warnings
 # from itertools import chain
 from abc import ABCMeta, abstractmethod
 # from functools import cache
+from collections import deque
 
 from accelerate.utils.operations import gather_object
 
 from dhnamlib.pylib import iteration
-from dhnamlib.pylib.iteration import pairs2dicts, not_none_valued_pairs
+from dhnamlib.pylib.iteration import pairs2dicts, not_none_valued_pairs, not_none_valued_dict
 from dhnamlib.pylib.time import TimeMeasure
 # from dhnamlib.pylib.text import camel_to_symbol
 # from dhnamlib.pylib.lazy import LazyProxy
@@ -19,15 +20,19 @@ from dhnamlib.pylib.mllib.learning import get_performance
 # from dhnamlib.pylib.torchlib.optimization import get_linear_schedule_with_warmup
 from dhnamlib.pylib.structure import XNamespace
 from dhnamlib.pylib.hflib.acceleration import alternate_object
-from dhnamlib.pylib.decoration import Register
+from dhnamlib.pylib.decoration import MethodRegister
+from dhnamlib.pylib.constant import NO_VALUE
 
 # from configuration import config, coc
 # from kqapro.evaluate import denotation_equal
 
 from splogic.utility.tqdm import xtqdm, utqdm
 from splogic.utility.acceleration import accelerator
+from splogic.base.execution import ExecResult, Executor
+from splogic.seq2seq.dynamic_bind import DynamicBinder
 
 from . import learning
+from . import decoding
 # from .execution import postprocess_prediction
 
 
@@ -40,38 +45,63 @@ class DenotationEqual(metaclass=ABCMeta):
         pass
 
 
-class PredictionCollector:
-    measure_register = Register()
+class ResultCollector:
+    method_register = MethodRegister()
 
     def __init__(self, evaluating, denotation_equal: DenotationEqual, num_return_sequences):
+        self._register = self.method_register.instantiate(self)
+
         self.evaluating = evaluating
         self.denotation_equal = denotation_equal
         self.num_return_sequences = num_return_sequences
+
+        self.batch_queue = deque()
 
         self.predictions = []
         if evaluating:
             self.answers = []
             self.num_correct = 0
 
-    def collect(self, *, predictions, answers=None):
-        self.predictions.extend(predictions)
-        if self.evaluating:
-            self.answers.extend(answers)
-            self.num_correct += compute_num_correct(
-                predictions, answers, self.denotation_equal,
-                num_return_sequences=self.num_return_sequences)
+    def collect(self, *, exec_result: ExecResult, answers=None):
+        self.batch_queue.append(
+            not_none_valued_dict(exec_result=exec_result,
+                                 answers=answers))
+        self.update()
 
-    @measure_register('accuracy')
+    def update(self, force=False):
+        while len(self.batch_queue) > 0:
+            if force or self.batch_queue[0]['exec_result'].is_done():
+                batch = self.batch_queue.popleft()
+                predictions = batch['exec_result'].get()
+                self.predictions.extend(predictions)
+
+                if self.evaluating:
+                    assert 'answers' in batch
+                    answers = batch['answers']
+                    self.answers.extend(answers)
+
+                    self.num_correct += compute_num_correct(
+                        predictions, answers, self.denotation_equal,
+                        num_return_sequences=self.num_return_sequences)
+
+    def wait_for_all_batches(self):
+        self.update(force=True)
+
+    @method_register('accuracy')
     def get_accuracy(self):
         assert len(self.predictions) == len(self.answers) * self.num_return_sequences
         return (self.num_correct / len(self.answers))
 
-    @measure_register('accuracy_percent')
+    @method_register('accuracy_percent')
     def get_accuracy_percent(self):
         return self.get_accuracy() * 100
 
-    def get_measure_value(self, measure_name):
-        return self.measure_register.retrieve(measure_name)()
+    def get_measure_value(self, measure_name, default=NO_VALUE):
+        if len(self.predictions) > 0:
+            return self._register.retrieve(measure_name)()
+        else:
+            assert default is not NO_VALUE
+            return default
 
     def get_overall_performance(self, measure_names):
         measure_kv_list = []
@@ -94,12 +124,15 @@ class PredictionCollector:
         return overall_performance
 
 
+
 def validate(
         *,
         grammar,
         compiler,
         model,
         context,
+        executor: Executor,
+        dynamic_binder: DynamicBinder,
         data_loader,
         batch_size,
         num_beams,
@@ -113,10 +146,10 @@ def validate(
         denotation_equal: DenotationEqual,
         using_oracle=False,
         collecting_weaksup_examples=False,
-        strict_postprocessing=False,
+        # strict_postprocessing=False,
         ignoring_parsing_errors=True,
         measure_name='accuracy',
-        prediction_collector_cls=PredictionCollector,
+        result_collector_cls=ResultCollector,
 ):
     assert not model.training
 
@@ -130,7 +163,7 @@ def validate(
     else:
         num_return_sequences = 1
 
-    pred_collector = prediction_collector_cls(
+    result_collector = result_collector_cls(
         evaluating=evaluating,
         denotation_equal=denotation_equal,
         num_return_sequences=num_return_sequences)
@@ -152,11 +185,13 @@ def validate(
     if evaluating:
         tqdm_fn = utqdm
         full_measure_name = f'oracle_{measure_name}' if using_oracle else measure_name
+        default_measure_value = 'none'
         tqdm_kwargs = dict(
             unit=full_measure_name,
-            update_fn=pred_collector.get_measure_value(f'{measure_name}_percent'),
+            update_fn=lambda: result_collector.get_measure_value(
+                f'{measure_name}_percent', default=default_measure_value),
             repr_format='{:5.2f}',
-            init_repr='none'
+            init_repr=default_measure_value
         )
     else:
         tqdm_fn = xtqdm
@@ -166,7 +201,7 @@ def validate(
         assert using_oracle
         assert evaluating
         assert num_beams > 1
-        assert strict_postprocessing
+        # assert strict_postprocessing
 
     all_decoding_time = 0
     tm = TimeMeasure()
@@ -176,24 +211,27 @@ def validate(
     # tqdm_fn = xtqdm  # DEBUG for time measure
     # tqdm_kwargs = dict()    # DEBUG for time measure
 
-    # print('---- Remove debug code ----')
-    # debug_batch_idx = -1
+    print('---- Remove debug code ----')
+    debug_batch_idx = -1
     for batch in tqdm_fn(data_loader, **tqdm_kwargs):
-        # if debug_batch_idx > 5:
-        #     break
-        # else:
-        #     debug_batch_idx += 1
+        if debug_batch_idx > 5:
+            break
+        else:
+            debug_batch_idx += 1
+
+        dynamic_bindings = dynamic_binder.bind_batch(grammar, batch)
 
         assert constrained_decoding or not softmax_masking
         if constrained_decoding:
-            logits_processor = learning.get_logits_processor(
+            logits_processor = decoding.get_logits_processor(
                 grammar, batch_size, num_beams, renormalizing=softmax_masking,
-                utterance_token_ids=batch['utterance_token_ids'])
+                # utterance_token_ids=batch['utterance_token_ids']
+                dynamic_bindings=dynamic_bindings)
         else:
             logits_processor = None
 
         tm.check()
-        token_id_seqs = learning.generate_token_id_seqs(
+        token_id_seqs = decoding.generate_token_id_seqs(
             grammar=grammar,
             model=unwrapped_model,
             utterance_token_ids=batch['utterance_token_ids'].to(unwrapped_model.device),
@@ -208,25 +246,26 @@ def validate(
 
         ignoring_errors = ignoring_parsing_errors or not (
             constrained_decoding and using_arg_candidate and using_distinctive_union_types)
-        last_states = learning.token_id_seqs_to_last_states(
+        last_states = decoding.token_id_seqs_to_last_states(
             grammar, token_id_seqs,
             ignoring_parsing_errors=ignoring_errors,
             verifying=False,
-            utterance_token_id_seqs=(batch['utterance_token_ids'].tolist() if using_arg_candidate else None),
+            dynamic_bindings=dynamic_bindings,
             num_return_sequences=num_return_sequences
         )
-        programs = learning.last_states_to_programs(
+        programs = decoding.last_states_to_programs(
             grammar, compiler, last_states, tolerant=True, ignoring_compilation_errors=ignoring_errors)
 
         num_all_examples += batch['utterance_token_ids'].shape[0]
-        predictions = learning.programs_to_predictions(context, programs, strict_postprocessing=strict_postprocessing)
+        exec_result = executor.execute(programs=programs, contexts=(context,) * len(programs))
+        # predictions = learning.programs_to_predictions(context, programs, strict_postprocessing=strict_postprocessing)
 
         if evaluating:
             assert 'answer' in batch
             answers = batch['answer']
-            pred_collector.collect(predictions=predictions, answers=answers)
+            result_collector.collect(exec_result=exec_result, answers=answers)
         else:
-            pred_collector.collect(predictions=predictions)
+            result_collector.collect(exec_result=exec_result)
 
         if analyzing or collecting_weaksup_examples:
             xns.all_example_ids.extend(batch['example_id'])
@@ -241,11 +280,13 @@ def validate(
 
             if evaluating:
                 assert 'labels' in batch
-                answer_last_states = learning.token_id_seqs_to_last_states(
+                answer_last_states = decoding.token_id_seqs_to_last_states(
                     grammar, batch['labels'].tolist(),
                     ignoring_parsing_errors=ignoring_errors,
                     verifying=True,  # config.debug,
-                    utterance_token_id_seqs=(batch['utterance_token_ids'].tolist() if using_arg_candidate else None))
+                    dynamic_bindings=dynamic_bindings,
+                    # utterance_token_id_seqs=(batch['utterance_token_ids'].tolist() if using_arg_candidate else None)
+                )
                 xns.all_answer_last_states.extend(answer_last_states)
 
         if collecting_weaksup_examples:
@@ -258,20 +299,21 @@ def validate(
 
     accelerator.wait_for_everyone()
 
-    assert len(pred_collector.predictions) == num_all_examples * num_return_sequences
+    result_collector.wait_for_all_batches()
+    assert len(result_collector.predictions) == num_all_examples * num_return_sequences
 
     if evaluating:
-        assert len(pred_collector.predictions) == len(pred_collector.answers) * num_return_sequences
+        assert len(result_collector.predictions) == len(result_collector.answers) * num_return_sequences
         if analyzing:
-            assert len(pred_collector.answers) == len(xns.all_answer_last_states)
+            assert len(result_collector.answers) == len(xns.all_answer_last_states)
 
-        overall_performance = pred_collector.get_overall_performance([measure_name])
+        overall_performance = result_collector.get_overall_performance([measure_name])
 
         if collecting_weaksup_examples:
             consistent_action_id_seq_groups = get_consistent_action_id_seq_groups(
                 xns.pop(all_predicted_token_id_seqs=not analyzing),
-                pred_collector.predictions,
-                pred_collector.answers,
+                result_collector.predictions,
+                result_collector.answers,
                 denotation_equal,
                 num_return_sequences)
 
@@ -279,7 +321,7 @@ def validate(
                 example for example in pairs2dicts(
                     example_id=xns.pop(all_example_ids=not analyzing),
                     utterance_token_ids=xns.pop(all_utterance_token_id_seqs=True),
-                    answer=pred_collector.answers,
+                    answer=result_collector.answers,
                     action_id_seq_group=consistent_action_id_seq_groups)
                 if len(example['action_id_seq_group']) > 0
             )
@@ -298,8 +340,8 @@ def validate(
             predicted_last_states=xns.pop(all_predicted_last_states=True),
             answer_last_states=xns.pop(all_answer_last_states=True) if evaluating else None,
             predicted_token_id_seqs=xns.pop(all_predicted_token_id_seqs=True),
-            predictions=pred_collector.predictions,
-            answers=pred_collector.answers if evaluating else None,
+            predictions=result_collector.predictions,
+            answers=result_collector.answers if evaluating else None,
             denotation_equal=denotation_equal,
         )
 
@@ -320,7 +362,7 @@ def validate(
     num_overall_examples = sum(gather_object([num_all_examples]))
 
     overall_predictions = alternate_object(
-        pred_collector.predictions,
+        result_collector.predictions,
         batch_size=batch_size * num_return_sequences)
 
     validation = dict(not_none_valued_pairs(

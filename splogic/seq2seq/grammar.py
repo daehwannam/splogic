@@ -60,12 +60,13 @@ class Seq2SeqGrammar(Grammar):
             super_to_sub_actions = strict_type_processing.iter_super_to_sub_actions(super_types_dict, is_non_conceptual_type)
             actions = tuple(chain(actions, super_to_sub_actions))
 
+        self.action_name_style = action_name_style
+
         super().__init__(formalism=formalism, super_types_dict=super_types_dict, actions=actions, start_action=start_action,
                          meta_actions=meta_actions, register=register, is_non_conceptual_type=is_non_conceptual_type,
                          use_reduce=use_reduce, inferencing_subtypes=inferencing_subtypes)
 
         self.token_processing = token_processing
-        self.action_name_style = action_name_style
         self.strict_type_processing = strict_type_processing
         self.nl_token_meta_name = nl_token_meta_name
         self.nl_token_meta_arg_name = nl_token_meta_arg_name
@@ -170,8 +171,11 @@ class Seq2SeqGrammar(Grammar):
     #     return self.dynamic_scope.let(pairs, **kwargs)
 
     def register_all(self):
+        self.register_base(self.register)
         self.register_specific(self.register)
-        self.register.update(self.general_register)
+
+    def register_base(self, register):
+        register.update(self.general_register.instantiate(self))
 
     @abstractfunction
     def register_specific(self, register):
@@ -220,7 +224,7 @@ class Seq2SeqGrammar(Grammar):
             opened_tree, children = tree.get_opened_tree_children()
             id_seq_prefix = tuple(self.token_to_id(child.value.get_meta_arg(self.nl_token_meta_arg_name))
                                   for child in children)
-            return tuple(trie.candidate_ids(id_seq_prefix))
+            return tuple(trie.generate_candidate_ids(id_seq_prefix))
         return arg_candidate
 
 

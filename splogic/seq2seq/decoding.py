@@ -110,26 +110,27 @@ def generate_token_id_seqs(
 
 
 def token_id_seqs_to_last_states(
-        grammar, token_id_seqs, ignoring_parsing_errors=False, verifying=False,
-        utterance_token_id_seqs=None,
+        grammar, token_id_seqs, *, ignoring_parsing_errors=False, verifying=False,
+        dynamic_bindings=None,
+        # utterance_token_id_seqs=None,
         num_return_sequences=1
 ):
-    if utterance_token_id_seqs is None:
-        _utterance_token_id_seqs = [None] * len(token_id_seqs)
+    if dynamic_bindings is None:
+        _dynamic_bindings = [{}] * len(token_id_seqs)
     else:
         if num_return_sequences > 1:
-            _utterance_token_id_seqs = tuple(iteration.repeat_in_order(
-                utterance_token_id_seqs, num_return_sequences))
+            _dynamic_bindings = tuple(iteration.repeat_in_order(
+                _dynamic_bindings, num_return_sequences))
         else:
-            _utterance_token_id_seqs = utterance_token_id_seqs
+            _dynamic_bindings = dynamic_bindings
 
-    assert len(token_id_seqs) == len(_utterance_token_id_seqs)
+    assert len(token_id_seqs) == len(_dynamic_bindings)
 
     predicted_last_states = tuple(
         token_id_seq_to_last_state(
             grammar, token_id_seq, ignoring_parsing_errors=ignoring_parsing_errors,
-            verifying=verifying, utterance_token_id_seq=utterance_token_id_seq)
-        for token_id_seq, utterance_token_id_seq in zip(token_id_seqs, _utterance_token_id_seqs))
+            verifying=verifying, dynamic_binding=dynamic_binding)
+        for token_id_seq, dynamic_binding in zip(token_id_seqs, _dynamic_bindings))
 
     return predicted_last_states
 
@@ -166,18 +167,6 @@ def last_states_to_programs(grammar, compiler, last_states, tolerant=False, igno
 #         for program in programs)
 
 #     return predictions
-
-
-def make_scheduler(*, optimizer, using_scheduler, train_data_loader, num_train_epochs, num_warmup_epochs):
-    if using_scheduler:
-        num_training_steps = len(train_data_loader) * num_train_epochs
-        num_warmup_steps = round(len(train_data_loader) * num_warmup_epochs)
-        scheduler = transformers.get_linear_schedule_with_warmup(
-            optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps)
-    else:
-        scheduler = transformers.get_constant_schedule(optimizer)
-
-    return scheduler
 
 
 class SequencePrefixProcessor:
@@ -294,7 +283,7 @@ class SequencePrefixProcessor:
                 elif curr_state.tree.is_closed_root():
                     return True, [self.EOS_TOKEN_ID]
                 else:
-                    with self.grammar.let_dynamic_trie(self.dynamic_tries[batch_id]):
+                    with self.grammar.dynamic_scope.let(**self.dynamic_bindings[batch_id]):
                         return curr_state.get_allowed_and_ids_pairs()
 
 

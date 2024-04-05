@@ -2,6 +2,7 @@ from itertools import chain
 
 import torch
 import torch.nn.functional as F
+import transformers
 
 # from configuration import config, coc
 
@@ -11,7 +12,6 @@ from dhnamlib.pylib.torchlib.dnn import (
     lengths_to_mask, masked_log_softmax, nll_without_reduction, pad_sequence)
 
 from splogic.utility.acceleration import accelerator
-from splogic.utility.trie import DenseSpanTrie
 
 from .decoding import token_id_seq_to_action_seq
 
@@ -38,6 +38,18 @@ def get_param_groups(model, learning_rate, weight_decay, non_decayed_names=None)
              lr=learning_rate)]
 
     return param_groups
+
+
+def make_scheduler(*, optimizer, using_scheduler, train_data_loader, num_train_epochs, num_warmup_epochs):
+    if using_scheduler:
+        num_training_steps = len(train_data_loader) * num_train_epochs
+        num_warmup_steps = round(len(train_data_loader) * num_warmup_epochs)
+        scheduler = transformers.get_linear_schedule_with_warmup(
+            optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps)
+    else:
+        scheduler = transformers.get_constant_schedule(optimizer)
+
+    return scheduler
 
 
 def labels_to_masks(grammar, labels, utterance_token_ids, except_eos=False, dynamic_binding={}):
@@ -98,18 +110,6 @@ def _allowed_and_ids_pairs_seqs_to_softmax_mask(allowed_and_ids_pairs_seqs, voca
                 softmax_mask[idx_in_batch, idx_in_seq, token_ids] = 0
 
     return softmax_mask
-
-
-def utterance_token_id_seq_to_span_trie(grammar, utterance_token_id_seq):
-    eos_token_id_idx = iteration.index(utterance_token_id_seq, grammar.utterance_tokenizer.eos_token_id, reverse=True)
-    assert utterance_token_id_seq[0] == grammar.utterance_tokenizer.bos_token_id
-    _utterance_token_id_seq = utterance_token_id_seq[1: eos_token_id_idx]
-    # first_utterance_token = grammar.utterance_tokenizer.convert_ids_to_tokens(_utterance_token_id_seq[0])
-    # if not first_utterance_token.startswith('Ġ'):
-    #     _utterance_token_id_seq[0] = grammar.utterance_tokenizer.convert_tokens_to_ids('Ġ' + first_utterance_token)
-    end_of_seq_id = grammar.reduce_action_id
-    utterance_span_trie = DenseSpanTrie(_utterance_token_id_seq, end_of_seq_id)
-    return utterance_span_trie
 
 
 def labels_to_nll_mask(grammar, labels, except_eos=False):

@@ -564,8 +564,8 @@ class ProgramTree(TreeStructure, metaclass=ABCMeta):
         return form_to_str(get_expr_form(self))
 
 
-@subclass
 def make_program_tree_cls(formalism: Formalism, name=None, opening_cache_size=10000):
+    @subclass
     class NewProgramTree(ProgramTree):
         # interface = Interface(ProgramTree)
 

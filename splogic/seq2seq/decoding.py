@@ -120,7 +120,7 @@ def token_id_seqs_to_last_states(
     else:
         if num_return_sequences > 1:
             _dynamic_bindings = tuple(iteration.repeat_in_order(
-                _dynamic_bindings, num_return_sequences))
+                dynamic_bindings, num_return_sequences))
         else:
             _dynamic_bindings = dynamic_bindings
 

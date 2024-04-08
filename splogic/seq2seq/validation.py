@@ -211,13 +211,13 @@ def validate(
     # tqdm_fn = xtqdm  # DEBUG for time measure
     # tqdm_kwargs = dict()    # DEBUG for time measure
 
-    print('---- Remove debug code ----')
-    debug_batch_idx = -1
+    # print('---- Remove debug code ----')
+    # debug_batch_idx = -1
     for batch in tqdm_fn(data_loader, **tqdm_kwargs):
-        if debug_batch_idx > 5:
-            break
-        else:
-            debug_batch_idx += 1
+        # if debug_batch_idx > 5:
+        #     break
+        # else:
+        #     debug_batch_idx += 1
 
         dynamic_bindings = dynamic_binder.bind_batch(grammar, batch)
 

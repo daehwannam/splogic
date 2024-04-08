@@ -22,10 +22,10 @@ class TokenProcessing:
         if using_distinctive_union_types:
             _get_token_act_type = self.get_token_act_type
         else:
-            non_distinctive_nl_token_act_type = self.get_non_distinctive_nl_token_act_type()
+            non_distinctive_nl_token_act_type = self.get_non_distinctive_nl_token_act_type
 
             def _get_token_act_type(token_value):
-                return non_distinctive_nl_token_act_type
+                return non_distinctive_nl_token_act_type(token_value)
 
         def iter_token_value_act_type_pairs():
             all_non_special_token_values = tuple(iter_default_non_special_tokens(lf_tokenizer))

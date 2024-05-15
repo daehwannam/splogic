@@ -7,6 +7,16 @@ import tempfile
 import torch
 from transformers import BartTokenizer, BartForConditionalGeneration, BartConfig
 
+# TODO: replace Bart* with Auto*
+# >>> from transformers import AutoTokenizer, AutoModelForPreTraining, AutoConfig
+#
+# Note:
+# AutoTokenizer loads *TokenizerFast rather than a normal Tokenizer.
+# e.g. BartTokenizerFast rather than BartTokenizer
+#
+# *TokenizerFast and Tokenizer works differently when new tokens are introduced:
+# https://discuss.huggingface.co/t/tokenizer-vs-tokenizerfast/9187
+
 from dhnamlib.pylib import filesys
 from dhnamlib.pylib.decoration import curry
 from dhnamlib.pylib.mllib.learning import get_measure, CheckpointManager

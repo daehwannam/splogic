@@ -6,11 +6,11 @@ from hissp.munger import munge, demunge
 from hissp.reader import SoftSyntaxError
 
 from dhnamlib.pylib.lisp import (remove_comments, replace_prefixed_parens, is_keyword, keyword_to_symbol)
-from dhnamlib.pylib.iteration import merge_dicts, chainelems
-from dhnamlib.pylib.function import starloop  # imported for eval_lissp
+from dhnamlib.pylib.iteration import merge_dicts, chainelems, unique
 from dhnamlib.pylib.decoration import MethodRegister, deprecated
 from dhnamlib.pylib.klass import abstractfunction, subclass, override
 # from dhnamlib.pylib.decoration import cache
+from dhnamlib.pylib.function import starloop  # imported for eval_lissp
 
 from dhnamlib.hissplib.macro import prelude, load_macro
 from dhnamlib.hissplib.module import import_lissp
@@ -92,6 +92,22 @@ class Grammar:
 
     def name_to_action(self, name):
         return self.formalism.name_to_action(name, self.get_name_to_action_dicts())
+        # try:
+        #     return self.formalism.name_to_action(name, self.get_name_to_action_dicts())
+        # except:
+        #     breakpoint()
+        #     print(name)
+
+    def convert_name_to_action(self, name):
+        '''
+        Convert a name to an aciton, which may not be used during parsing.
+        For example, `self.start_action` is not used during parsing.
+        '''
+
+        if name == self.start_action.name:
+            return self.start_action
+        else:
+            return self.name_to_action(name)
 
     def get_name_to_action_dicts(self):
         return [self._name_to_base_action_dict, self._name_to_added_action_dict]
@@ -219,7 +235,7 @@ def read_grammar(file_path, *, formalism=None, grammar_cls=Grammar, grammar_kwar
                     else:
                         assert isinstance(child, str)
                         child_type = demunge(child)
-                    super_types_dict.setdefault(child_type, set()).add(parent_type)
+                    super_types_dict.setdefault(child_type, set()).add(parent_type)  # A child_type can have more than one parent_type
 
             root_kw, *children = type_hierarchy_tuple
             root_type = root_kw[1:]
@@ -362,7 +378,7 @@ def read_grammar(file_path, *, formalism=None, grammar_cls=Grammar, grammar_kwar
             super_types_dict=merge_dicts(super_types_dicts,
                                          merge_fn=lambda values: set(chainelems(values))),
             actions=actions,
-            start_action=start_actions[0],
+            start_action=unique(start_actions),
             meta_actions=meta_actions,
             register=register,
             is_non_conceptual_type=is_non_conceptual_type,

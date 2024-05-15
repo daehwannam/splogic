@@ -24,6 +24,15 @@ class Compiler(metaclass=ABCMeta):
 
 
 @subclass
+class ExprCompiler(Compiler):
+    # interface = Interface(Compiler)
+
+    @implement
+    def compile_tree(self, tree, tolerant=False):
+        return tree.get_expr_str()
+
+
+@subclass
 class LispCompiler(Compiler):
     # interface = Interface(Compiler)
 
@@ -74,6 +83,16 @@ class ExecResult(metaclass=ABCMeta):
         pass
 
 
+class Executor(metaclass=ABCMeta):
+    @abstractmethod
+    def execute(self, programs, contexts) -> ExecResult:
+        pass
+
+    # @abstractmethod
+    # def wait_until_all_done():
+    #     pass
+
+
 @subclass
 class InstantExecResult(ExecResult):
     # interface = Interface(ExecResult)
@@ -94,16 +113,6 @@ class InstantExecResult(ExecResult):
     #     return value
 
 
-class Executor(metaclass=ABCMeta):
-    @abstractmethod
-    def execute(self, programs, contexts) -> ExecResult:
-        pass
-
-    # @abstractmethod
-    # def wait_until_all_done():
-    #     pass
-
-
 @subclass
 class InstantExecutor(Executor):
     # interface = Interface(Executor)
@@ -119,11 +128,66 @@ class InstantExecutor(Executor):
     @implement
     def execute(self, programs, contexts) -> ExecResult:
         assert len(programs) == len(contexts)
-        results = self.result_cls(
+        result = self.result_cls(
             tuple(program(self.context_wrapper(context))
                   for program, context in zip(programs, contexts)))
 
-        return results
+        return result
+
+
+@subclass
+class LazyExecResult(ExecResult):
+    # interface = Interface(ExecResult)
+
+    def __init__(self, lazy_executor):
+        self._lazy_executor = lazy_executor
+
+    def _set_values(self, values):
+        self._values = values
+
+    @implement
+    def get(self):
+        self._lazy_executor._work()
+        return self._values
+
+    @implement
+    def is_done(self) -> bool:
+        return hasattr(self, '_values')
+
+    # def post_process(self, value):
+    #     return value
+
+
+@subclass
+class LazyExecutor(Executor):
+    # interface = Interface(Executor)
+
+    def __init__(
+            self,
+            result_cls=LazyExecResult,
+            context_wrapper=identity,
+    ):
+        self.result_cls = result_cls
+        self.context_wrapper = context_wrapper
+
+        self._postponed_batch_groups = []
+
+    @implement
+    def execute(self, programs, contexts) -> ExecResult:
+        assert len(programs) == len(contexts)
+        lazy_result = LazyExecResult(self)
+        self._postponed_batch_groups.append((lazy_result, programs, contexts))
+        return lazy_result
+
+    def _work(self):
+        self._process()
+        self._postponed_batch_groups = []
+
+    def _process(self):
+        for lazy_result, programs, contexts in self._postponed_batch_groups:
+            lazy_result._set_values(
+                tuple(program(self.context_wrapper(context))
+                      for program, context in zip(programs, contexts)))
 
 
 @notimplemented

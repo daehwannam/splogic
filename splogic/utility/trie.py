@@ -8,7 +8,7 @@ from dhnamlib.pylib.iteration import all_same, unique
 # from dhnamlib.pylib.klass import Interface
 from dhnamlib.pylib.klass import subclass, implement, override, abstractfunction
 from dhnamlib.pylib.function import identity
-# from dhnamlib.pylib.type import typecast
+# from dhnamlib.pylib.typeutil import typecast
 
 import pygtrie
 

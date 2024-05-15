@@ -50,7 +50,11 @@ class TokenProcessing:
         pass
 
     @abstractfunction
-    def labeled_logical_form_to_action_seq(grammar, context, labeled_logical_form):
+    def labeled_logical_form_to_action_seq(labeled_logical_form, *args, **kwargs):
+        pass
+
+    @abstractfunction
+    def labeled_logical_form_to_action_tree(grammar, context, labeled_logical_form):
         pass
 
 

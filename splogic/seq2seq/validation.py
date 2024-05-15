@@ -83,6 +83,8 @@ class ResultCollector:
                     self.num_correct += compute_num_correct(
                         predictions, answers, self.denotation_equal,
                         num_return_sequences=self.num_return_sequences)
+            else:
+                break
 
     def wait_for_all_batches(self):
         self.update(force=True)

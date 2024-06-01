@@ -7,6 +7,7 @@ from .grammar import get_extra_ns
 from dhnamlib.pylib.klass import subclass, implement
 from dhnamlib.pylib.decoration import excepting, notimplemented
 from dhnamlib.pylib.function import identity
+from dhnamlib.pylib.constant import NO_VALUE
 
 from dhnamlib.hissplib.macro import prelude
 from dhnamlib.hissplib.compile import eval_lissp
@@ -141,13 +142,16 @@ class LazyExecResult(ExecResult):
 
     def __init__(self, lazy_executor):
         self._lazy_executor = lazy_executor
+        self._values = NO_VALUE
 
     def _set_values(self, values):
         self._values = values
 
     @implement
     def get(self):
-        self._lazy_executor._work()
+        if self._values is NO_VALUE:
+            self._lazy_executor._work()
+        assert self._values is not NO_VALUE
         return self._values
 
     @implement
@@ -175,28 +179,44 @@ class LazyExecutor(Executor):
     @implement
     def execute(self, programs, contexts) -> ExecResult:
         assert len(programs) == len(contexts)
-        lazy_result = LazyExecResult(self)
+        lazy_result = self.result_cls(self)
         self._postponed_batch_groups.append((lazy_result, programs, contexts))
         return lazy_result
 
     def _work(self):
-        self._process()
-        self._postponed_batch_groups = []
+        if len(self._postponed_batch_groups) > 0:
+            self._process(self._postponed_batch_groups)
+            self._postponed_batch_groups = []
 
-    def _process(self):
-        for lazy_result, programs, contexts in self._postponed_batch_groups:
+    def _process(self, postponed_batch_groups):
+        for lazy_result, programs, contexts in postponed_batch_groups:
             lazy_result._set_values(
                 tuple(program(self.context_wrapper(context))
                       for program, context in zip(programs, contexts)))
 
 
+class ContextCreater(metaclass=ABCMeta):
+    @abstractmethod
+    def __call__(self, batch):
+        """Make contexts. The number of contexts is same with the batch size."""
+        pass
+
+
+@subclass
+class SingletonContextCreater(ContextCreater):
+    def __init__(self, context_fn):
+        self.context_fn = context_fn
+        self._context = NO_VALUE
+
+    @implement
+    def __call__(self, batch):
+        assert batch['utterance_token_ids'].dim() == 2
+        batch_size = len(batch['utterance_token_ids'])
+        if self._context is NO_VALUE:
+            self.context = self.context_fn()
+        return (self.context) * batch_size
+
+
 @notimplemented
 class AsyncExecutor(Executor):
     pass
-
-
-@notimplemented
-class ContextCreater(metaclass=ABCMeta):
-    @abstractmethod
-    def __call__(self, *args, **kwargs):
-        pass

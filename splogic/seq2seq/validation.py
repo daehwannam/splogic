@@ -4,6 +4,7 @@ import warnings
 # from itertools import chain
 from abc import ABCMeta, abstractmethod
 # from functools import cache
+from functools import partial
 from collections import deque
 
 from accelerate.utils.operations import gather_object
@@ -15,6 +16,7 @@ from dhnamlib.pylib.time import TimeMeasure
 # from dhnamlib.pylib.lazy import LazyProxy
 # from dhnamlib.pylib.klass import Interface
 # from dhnamlib.pylib.klass import subclass, implement, abstractfunction
+from dhnamlib.pylib.klass import subclass, implement
 from dhnamlib.pylib.torchlib.dnn import unpad_sequence
 from dhnamlib.pylib.mllib.learning import get_performance
 # from dhnamlib.pylib.torchlib.optimization import get_linear_schedule_with_warmup
@@ -45,6 +47,13 @@ class DenotationEqual(metaclass=ABCMeta):
         pass
 
 
+@subclass
+class NaiveDenotationEqual(DenotationEqual):
+    @implement
+    def __call__(self, prediction, answer):
+        return prediction == answer
+
+
 class ResultCollector:
     method_register = MethodRegister()
 
@@ -65,26 +74,29 @@ class ResultCollector:
     def collect(self, *, exec_result: ExecResult, answers=None):
         self.batch_queue.append(
             not_none_valued_dict(exec_result=exec_result,
-                                 answers=answers))
+                                 answer=answers))
         self.update()
 
     def update(self, force=False):
         while len(self.batch_queue) > 0:
             if force or self.batch_queue[0]['exec_result'].is_done():
                 batch = self.batch_queue.popleft()
-                predictions = batch['exec_result'].get()
-                self.predictions.extend(predictions)
-
-                if self.evaluating:
-                    assert 'answers' in batch
-                    answers = batch['answers']
-                    self.answers.extend(answers)
-
-                    self.num_correct += compute_num_correct(
-                        predictions, answers, self.denotation_equal,
-                        num_return_sequences=self.num_return_sequences)
+                self._update_from_batch(batch)
             else:
                 break
+
+    def _update_from_batch(self, batch):
+        predictions = batch['exec_result'].get()
+        self.predictions.extend(predictions)
+
+        if self.evaluating:
+            assert 'answer' in batch
+            answers = batch['answer']
+            self.answers.extend(answers)
+
+            self.num_correct += compute_num_correct(
+                predictions, answers, self.denotation_equal,
+                num_return_sequences=self.num_return_sequences)
 
     def wait_for_all_batches(self):
         self.update(force=True)
@@ -105,7 +117,7 @@ class ResultCollector:
             assert default is not NO_VALUE
             return default
 
-    def get_overall_performance(self, measure_names):
+    def get_overall_performance(self, measure_names, with_extra=False):
         measure_kv_list = []
         measure_cnt = 0
 
@@ -123,264 +135,306 @@ class ResultCollector:
         assert len(measure_names) == measure_cnt
 
         overall_performance = get_performance(measure_kv_list)
-        return overall_performance
 
-
-
-def validate(
-        *,
-        grammar,
-        compiler,
-        model,
-        context,
-        executor: Executor,
-        dynamic_binder: DynamicBinder,
-        data_loader,
-        batch_size,
-        num_beams,
-        generation_max_length,
-        analyzing=True,
-        softmax_masking,
-        constrained_decoding,
-        using_arg_candidate,
-        using_distinctive_union_types,
-        evaluating,
-        denotation_equal: DenotationEqual,
-        using_oracle=False,
-        collecting_weaksup_examples=False,
-        # strict_postprocessing=False,
-        ignoring_parsing_errors=True,
-        measure_name='accuracy',
-        result_collector_cls=ResultCollector,
-):
-    assert not model.training
-
-    xns = XNamespace()
-
-    num_all_examples = 0
-
-    if using_oracle:
-        assert batch_size > 1
-        num_return_sequences = num_beams
-    else:
-        num_return_sequences = 1
-
-    result_collector = result_collector_cls(
-        evaluating=evaluating,
-        denotation_equal=denotation_equal,
-        num_return_sequences=num_return_sequences)
-
-    if analyzing or collecting_weaksup_examples:
-        xns.all_example_ids = []
-        xns.all_predicted_token_id_seqs = []
-
-    if analyzing:
-        xns.all_utterances = []
-        xns.all_predicted_last_states = []
-
-        if evaluating:
-            xns.all_answer_last_states = []
-
-    if collecting_weaksup_examples:
-        xns.all_utterance_token_id_seqs = []
-
-    if evaluating:
-        tqdm_fn = utqdm
-        full_measure_name = f'oracle_{measure_name}' if using_oracle else measure_name
-        default_measure_value = 'none'
-        tqdm_kwargs = dict(
-            unit=full_measure_name,
-            update_fn=lambda: result_collector.get_measure_value(
-                f'{measure_name}_percent', default=default_measure_value),
-            repr_format='{:5.2f}',
-            init_repr=default_measure_value
-        )
-    else:
-        tqdm_fn = xtqdm
-        tqdm_kwargs = dict()
-
-    if collecting_weaksup_examples:
-        assert using_oracle
-        assert evaluating
-        assert num_beams > 1
-        # assert strict_postprocessing
-
-    all_decoding_time = 0
-    tm = TimeMeasure()
-
-    unwrapped_model = accelerator.unwrap_model(model)
-
-    # tqdm_fn = xtqdm  # DEBUG for time measure
-    # tqdm_kwargs = dict()    # DEBUG for time measure
-
-    # print('---- Remove debug code ----')
-    # debug_batch_idx = -1
-    for batch in tqdm_fn(data_loader, **tqdm_kwargs):
-        # if debug_batch_idx > 5:
-        #     break
-        # else:
-        #     debug_batch_idx += 1
-
-        dynamic_bindings = dynamic_binder.bind_batch(grammar, batch)
-
-        assert constrained_decoding or not softmax_masking
-        if constrained_decoding:
-            logits_processor = decoding.get_logits_processor(
-                grammar, batch_size, num_beams, renormalizing=softmax_masking,
-                # utterance_token_ids=batch['utterance_token_ids']
-                dynamic_bindings=dynamic_bindings)
+        if with_extra:
+            # extra_performance = get_performance()
+            extra_performance = None
+            return overall_performance, extra_performance
         else:
-            logits_processor = None
+            return overall_performance
 
-        tm.check()
-        token_id_seqs = decoding.generate_token_id_seqs(
-            grammar=grammar,
-            model=unwrapped_model,
-            utterance_token_ids=batch['utterance_token_ids'].to(unwrapped_model.device),
-            max_length=generation_max_length,
-            num_beams=num_beams,
-            num_return_sequences=num_return_sequences,
-            logits_processor=logits_processor,
-            # **generation_kwargs
-        )
-        all_decoding_time += tm.elapse()
-        # continue                # DEBUG for time measure
 
-        ignoring_errors = ignoring_parsing_errors or not (
-            constrained_decoding and using_arg_candidate and using_distinctive_union_types)
-        last_states = decoding.token_id_seqs_to_last_states(
-            grammar, token_id_seqs,
-            ignoring_parsing_errors=ignoring_errors,
-            verifying=False,
-            dynamic_bindings=dynamic_bindings,
-            num_return_sequences=num_return_sequences
-        )
-        programs = decoding.last_states_to_programs(
-            grammar, compiler, last_states, tolerant=True, ignoring_compilation_errors=ignoring_errors)
+class Validator:
+    def __init__(
+            self,
+            compiler,
+            context_creator,
+            executor: Executor,
+            dynamic_binder,
+            denotation_equal: DenotationEqual,
+            result_collector_cls: ResultCollector,
+            extra_analysis_keys=(),
+            evaluating_in_progress=True,
+    ):
+        self.compiler = compiler
+        self.context_creator = context_creator
+        self.executor = executor
+        self.dynamic_binder = dynamic_binder
+        self.denotation_equal = denotation_equal
+        self.result_collector_cls = result_collector_cls
+        self.extra_analysis_keys = extra_analysis_keys
+        self.evaluating_in_progress = evaluating_in_progress
 
-        num_all_examples += batch['utterance_token_ids'].shape[0]
-        exec_result = executor.execute(programs=programs, contexts=(context,) * len(programs))
-        # predictions = learning.programs_to_predictions(context, programs, strict_postprocessing=strict_postprocessing)
+    def validate(
+            self,
+            *,
+            grammar,
+            model,
+            data_loader,
+            batch_size,
+            num_beams,
+            generation_max_length,
+            analyzing=True,
+            softmax_masking,
+            constrained_decoding,
+            using_arg_candidate,
+            using_distinctive_union_types,
+            evaluating,
+            using_oracle=False,
+            collecting_weaksup_examples=False,
+            # strict_postprocessing=False,
+            ignoring_parsing_errors=True,
+            measure_name='accuracy',
+            using_percent_for_progress=True,
+    ):
+        assert not model.training
 
-        if evaluating:
-            assert 'answer' in batch
-            answers = batch['answer']
-            result_collector.collect(exec_result=exec_result, answers=answers)
+        xns = XNamespace()
+
+        num_all_examples = 0
+
+        if using_oracle:
+            assert batch_size > 1
+            num_return_sequences = num_beams
         else:
-            result_collector.collect(exec_result=exec_result)
+            num_return_sequences = 1
+
+        result_collector = self.result_collector_cls(
+            evaluating=evaluating,
+            denotation_equal=self.denotation_equal,
+            num_return_sequences=num_return_sequences)
 
         if analyzing or collecting_weaksup_examples:
-            xns.all_example_ids.extend(batch['example_id'])
-            xns.all_predicted_token_id_seqs.extend(token_id_seqs)
+            xns.all_example_ids = []
+            xns.all_predicted_token_id_seqs = []
 
         if analyzing:
-            utterances = grammar.utterance_tokenizer.batch_decode(
-                batch['utterance_token_ids'], skip_special_tokens=True)
-
-            xns.all_utterances.extend(utterances)
-            xns.all_predicted_last_states.extend(last_states)
+            xns.all_dynamic_bindings = []
+            xns.all_utterances = []
+            xns.all_predicted_last_states = []
 
             if evaluating:
-                assert 'labels' in batch
-                answer_last_states = decoding.token_id_seqs_to_last_states(
-                    grammar, batch['labels'].tolist(),
-                    ignoring_parsing_errors=ignoring_errors,
-                    verifying=True,  # config.debug,
-                    dynamic_bindings=dynamic_bindings,
-                    # utterance_token_id_seqs=(batch['utterance_token_ids'].tolist() if using_arg_candidate else None)
-                )
-                xns.all_answer_last_states.extend(answer_last_states)
+                xns.all_answer_last_states = []
+
+            extra_analysis_dict = {}
 
         if collecting_weaksup_examples:
-            xns.all_utterance_token_id_seqs.extend(unpad_sequence(
-                batch['utterance_token_ids'].tolist(), grammar.lf_tokenizer.pad_token_id))
+            xns.all_utterance_token_id_seqs = []
 
-    # coc.logger.info('All decoding time: {} second'.format(all_decoding_time))
-    # print('All decoding time: {} second'.format(all_decoding_time))  # DEBUG for time measure
-    # import sys; sys.exit(0)      # DEBUG for time measure
+        if evaluating and self.evaluating_in_progress:
+            tqdm_fn = utqdm
+            progress_unit_name = f'oracle_{measure_name}' if using_oracle else measure_name
+            default_measure_value = 'none'
 
-    accelerator.wait_for_everyone()
+            def tqdm_update_fn():
+                return result_collector.get_measure_value(
+                    measure_name, default=default_measure_value) * \
+                    (100 if using_percent_for_progress else 1)
 
-    result_collector.wait_for_all_batches()
-    assert len(result_collector.predictions) == num_all_examples * num_return_sequences
-
-    if evaluating:
-        assert len(result_collector.predictions) == len(result_collector.answers) * num_return_sequences
-        if analyzing:
-            assert len(result_collector.answers) == len(xns.all_answer_last_states)
-
-        overall_performance = result_collector.get_overall_performance([measure_name])
-
-        if collecting_weaksup_examples:
-            consistent_action_id_seq_groups = get_consistent_action_id_seq_groups(
-                xns.pop(all_predicted_token_id_seqs=not analyzing),
-                result_collector.predictions,
-                result_collector.answers,
-                denotation_equal,
-                num_return_sequences)
-
-            weaksup_examples = tuple(
-                example for example in pairs2dicts(
-                    example_id=xns.pop(all_example_ids=not analyzing),
-                    utterance_token_ids=xns.pop(all_utterance_token_id_seqs=True),
-                    answer=result_collector.answers,
-                    action_id_seq_group=consistent_action_id_seq_groups)
-                if len(example['action_id_seq_group']) > 0
+            tqdm_kwargs = dict(
+                unit=progress_unit_name,
+                update_fn=tqdm_update_fn,
+                repr_format='{:5.2f}',
+                init_repr=default_measure_value
             )
-            overall_weaksup_examples = sorted(gather_object(weaksup_examples), key=lambda example: example['example_id'])
-    else:
-        overall_performance = None
+        else:
+            tqdm_fn = xtqdm
+            tqdm_kwargs = dict()
 
-    if analyzing:
-        analysis = analyze(
-            grammar=grammar,
-            constrained_decoding=constrained_decoding,
-            num_return_sequences=num_return_sequences,
-            evaluating=evaluating,
-            example_ids=xns.pop(all_example_ids=True),
-            utterances=xns.pop(all_utterances=True),
-            predicted_last_states=xns.pop(all_predicted_last_states=True),
-            answer_last_states=xns.pop(all_answer_last_states=True) if evaluating else None,
-            predicted_token_id_seqs=xns.pop(all_predicted_token_id_seqs=True),
-            predictions=result_collector.predictions,
-            answers=result_collector.answers if evaluating else None,
-            denotation_equal=denotation_equal,
-        )
+        if collecting_weaksup_examples:
+            assert using_oracle
+            assert evaluating
+            assert num_beams > 1
+            # assert strict_postprocessing
 
-        overall_analysis = alternate_object(analysis, batch_size=batch_size)
+        all_decoding_time = 0
+        tm = TimeMeasure()
 
-    if len(xns) > 0:
-        raise Exception('There is an existing variable: {}'.format(', '.join(xns)))
+        unwrapped_model = accelerator.unwrap_model(model)
 
-    def get_time_info(overall_decoding_time, overall_num_examples):
-        average_time = overall_decoding_time / overall_num_examples
-        return dict(
-            overall_decoding_time=overall_decoding_time,
-            average_time=overall_decoding_time / overall_num_examples,
-            average_time_millisecond=average_time * 1000
-        )
+        # tqdm_fn = xtqdm  # DEBUG for time measure
+        # tqdm_kwargs = dict()    # DEBUG for time measure
 
-    overall_decoding_time = max(gather_object([all_decoding_time]))
-    num_overall_examples = sum(gather_object([num_all_examples]))
+        # print('---- Remove debug code ----')
+        # debug_batch_idx = -1
+        for batch in tqdm_fn(data_loader, **tqdm_kwargs):
+            # if debug_batch_idx > 5:
+            #     break
+            # else:
+            #     debug_batch_idx += 1
 
-    overall_predictions = alternate_object(
-        result_collector.predictions,
-        batch_size=batch_size * num_return_sequences)
+            dynamic_bindings = self.dynamic_binder.bind_batch(batch, grammar=grammar)
 
-    validation = dict(not_none_valued_pairs(
-        performance=overall_performance,
-        analysis=overall_analysis if analyzing else None,
-        weaksup_examples=overall_weaksup_examples if collecting_weaksup_examples else None,
-        time_info=get_time_info(overall_decoding_time, num_overall_examples),
-        predictions=overall_predictions))
+            assert constrained_decoding or not softmax_masking
+            if constrained_decoding:
+                logits_processor = decoding.get_logits_processor(
+                    grammar, batch_size, num_beams, renormalizing=softmax_masking,
+                    # utterance_token_ids=batch['utterance_token_ids']
+                    dynamic_bindings=dynamic_bindings)
+            else:
+                logits_processor = None
 
-    return validation
+            tm.check()
+            token_id_seqs = decoding.generate_token_id_seqs(
+                grammar=grammar,
+                model=unwrapped_model,
+                utterance_token_ids=batch['utterance_token_ids'].to(unwrapped_model.device),
+                max_length=generation_max_length,
+                num_beams=num_beams,
+                num_return_sequences=num_return_sequences,
+                logits_processor=logits_processor,
+                # **generation_kwargs
+            )
+            all_decoding_time += tm.elapse()
+            # continue                # DEBUG for time measure
+
+            ignoring_errors = ignoring_parsing_errors or not (
+                constrained_decoding and using_arg_candidate and using_distinctive_union_types)
+            last_states = decoding.token_id_seqs_to_last_states(
+                grammar, token_id_seqs,
+                ignoring_parsing_errors=ignoring_errors,
+                verifying=False,
+                dynamic_bindings=dynamic_bindings,
+                num_return_sequences=num_return_sequences
+            )
+            programs = decoding.last_states_to_programs(
+                grammar, self.compiler, last_states, dynamic_bindings,
+                tolerant=True, ignoring_compilation_errors=ignoring_errors)
+
+            num_all_examples += batch['utterance_token_ids'].shape[0]
+            exec_result = self.executor.execute(programs=programs, contexts=self.context_creator(batch))
+            # exec_result = executor.execute(programs=programs, contexts=(context,) * len(programs))
+            # predictions = learning.programs_to_predictions(context, programs, strict_postprocessing=strict_postprocessing)
+
+            if evaluating:
+                assert 'answer' in batch
+                answers = batch['answer']
+                result_collector.collect(exec_result=exec_result, answers=answers)
+            else:
+                result_collector.collect(exec_result=exec_result)
+
+            if analyzing or collecting_weaksup_examples:
+                xns.all_example_ids.extend(batch['example_id'])
+                xns.all_predicted_token_id_seqs.extend(token_id_seqs)
+
+            if analyzing:
+                xns.all_dynamic_bindings.extend(dynamic_bindings)
+
+                utterances = grammar.utterance_tokenizer.batch_decode(
+                    batch['utterance_token_ids'], skip_special_tokens=True)
+
+                xns.all_utterances.extend(utterances)
+                xns.all_predicted_last_states.extend(last_states)
+
+                if evaluating:
+                    assert 'labels' in batch
+                    answer_last_states = decoding.token_id_seqs_to_last_states(
+                        grammar, batch['labels'].tolist(),
+                        ignoring_parsing_errors=ignoring_errors,
+                        verifying=True,  # config.debug,
+                        dynamic_bindings=dynamic_bindings,
+                        # utterance_token_id_seqs=(batch['utterance_token_ids'].tolist() if using_arg_candidate else None)
+                    )
+                    xns.all_answer_last_states.extend(answer_last_states)
+
+                for analysis_key in self.extra_analysis_keys:
+                    extra_analysis_dict.setdefault(analysis_key, []).extend(batch[analysis_key])
+
+            if collecting_weaksup_examples:
+                xns.all_utterance_token_id_seqs.extend(unpad_sequence(
+                    batch['utterance_token_ids'].tolist(), grammar.lf_tokenizer.pad_token_id))
+
+        # coc.logger.info('All decoding time: {} second'.format(all_decoding_time))
+        # print('All decoding time: {} second'.format(all_decoding_time))  # DEBUG for time measure
+        # import sys; sys.exit(0)      # DEBUG for time measure
+
+        accelerator.wait_for_everyone()
+
+        result_collector.wait_for_all_batches()
+        assert len(result_collector.predictions) == num_all_examples * num_return_sequences
+
+        if evaluating:
+            assert len(result_collector.predictions) == len(result_collector.answers) * num_return_sequences
+            if analyzing:
+                assert len(result_collector.answers) == len(xns.all_answer_last_states)
+
+            overall_performance, extra_performance = result_collector.get_overall_performance([measure_name], with_extra=True)
+
+            if collecting_weaksup_examples:
+                consistent_action_id_seq_groups = get_consistent_action_id_seq_groups(
+                    xns.pop(all_predicted_token_id_seqs=not analyzing),
+                    result_collector.predictions,
+                    result_collector.answers,
+                    self.denotation_equal,
+                    num_return_sequences)
+
+                weaksup_examples = tuple(
+                    example for example in pairs2dicts(
+                        example_id=xns.pop(all_example_ids=not analyzing),
+                        utterance_token_ids=xns.pop(all_utterance_token_id_seqs=True),
+                        answer=result_collector.answers,
+                        action_id_seq_group=consistent_action_id_seq_groups)
+                    if len(example['action_id_seq_group']) > 0
+                )
+                overall_weaksup_examples = sorted(gather_object(weaksup_examples), key=lambda example: example['example_id'])
+        else:
+            overall_performance = None
+            extra_performance = None
+
+        if analyzing:
+            analysis = analyze(
+                grammar=grammar,
+                constrained_decoding=constrained_decoding,
+                num_return_sequences=num_return_sequences,
+                evaluating=evaluating,
+                example_ids=xns.pop(all_example_ids=True),
+                dynamic_bindings=xns.pop(all_dynamic_bindings=True),
+                utterances=xns.pop(all_utterances=True),
+                predicted_last_states=xns.pop(all_predicted_last_states=True),
+                answer_last_states=xns.pop(all_answer_last_states=True) if evaluating else None,
+                predicted_token_id_seqs=xns.pop(all_predicted_token_id_seqs=True),
+                predictions=result_collector.predictions,
+                answers=result_collector.answers if evaluating else None,
+                denotation_equal=self.denotation_equal,
+                **extra_analysis_dict,
+            )
+
+            overall_analysis = alternate_object(analysis, batch_size=batch_size)
+
+        if len(xns) > 0:
+            raise Exception('There is an existing variable: {}'.format(', '.join(xns)))
+
+        def get_time_info(overall_decoding_time, overall_num_examples):
+            average_time = overall_decoding_time / overall_num_examples
+            return dict(
+                overall_decoding_time=overall_decoding_time,
+                average_time=overall_decoding_time / overall_num_examples,
+                average_time_millisecond=average_time * 1000
+            )
+
+        overall_decoding_time = max(gather_object([all_decoding_time]))
+        num_overall_examples = sum(gather_object([num_all_examples]))
+
+        overall_predictions = alternate_object(
+            result_collector.predictions,
+            batch_size=batch_size * num_return_sequences)
+
+        validation = dict(not_none_valued_pairs(
+            performance=overall_performance,
+            extra_performance=extra_performance,
+            analysis=overall_analysis if analyzing else None,
+            weaksup_examples=overall_weaksup_examples if collecting_weaksup_examples else None,
+            time_info=get_time_info(overall_decoding_time, num_overall_examples),
+            predictions=overall_predictions))
+
+        return validation
 
 
 def analyze(
         grammar, constrained_decoding, num_return_sequences, evaluating,
-        example_ids, utterances, predicted_last_states, answer_last_states,
-        predicted_token_id_seqs, predictions, answers, denotation_equal
+        example_ids, dynamic_bindings, utterances, predicted_last_states, answer_last_states,
+        predicted_token_id_seqs, predictions, answers, denotation_equal,
+        **extra_analysis_dict
 ):
     def get_action_seq(last_state):
         if last_state is grammar.search_state_cls.INVALID:
@@ -397,13 +451,16 @@ def analyze(
         else:
             return repr(last_state.tree)
 
-    def get_expr_str(last_state, expr_key=None):
+    def get_expr_str(dynamic_binding, last_state, expr_key=None):
         if last_state is grammar.search_state_cls.INVALID:
             return None
         else:
             if last_state.tree.is_closed_root():
+                # with grammar.dynamic_scope.let(**dynamic_binding):  # debug
+                #     return last_state.tree.get_expr_str(expr_key=expr_key)  # debug
                 try:
-                    return last_state.tree.get_expr_str(expr_key=expr_key)
+                    with grammar.dynamic_scope.let(**dynamic_binding):
+                        return last_state.tree.get_expr_str(expr_key=expr_key)
                 except Exception as error:
                     if constrained_decoding:
                         warnings.warn('Error occured during get_expr_str')
@@ -415,13 +472,14 @@ def analyze(
             else:
                 return None
 
-    def analyze_program(last_states, token_id_seqs=None):
+    def analyze_program(dynamic_bindings, last_states, token_id_seqs=None):
         program_analysis = list(pairs2dicts(not_none_valued_pairs(
             tokens=list(map(grammar.lf_tokenizer.convert_ids_to_tokens, token_id_seqs)) if token_id_seqs is not None else None,
             action_seq=list(map(get_action_seq, last_states)),
             tree=list(map(get_tree_repr, last_states)),
-            expr=list(map(get_expr_str, last_states)),
-            visual_expr=list(map(lambda last_state: get_expr_str(last_state, expr_key='visual'), last_states)),
+            expr=list(map(get_expr_str, dynamic_bindings, last_states)),
+            # visual_expr=list(map(lambda last_state: get_expr_str(last_state, expr_key='visual'), last_states)),
+            visual_expr=list(map(partial(get_expr_str, expr_key='visual'), dynamic_bindings, last_states)),
         )))
         return program_analysis
 
@@ -445,8 +503,9 @@ def analyze(
         prediction=group_predictions_conditionally(predictions),
         correct=correct_list,
         predicted_program=group_predictions_conditionally(
-            analyze_program(predicted_last_states, predicted_token_id_seqs)),
-        answer_program=(analyze_program(answer_last_states) if evaluating else None),
+            analyze_program(dynamic_bindings, predicted_last_states, predicted_token_id_seqs)),
+        answer_program=(analyze_program(dynamic_bindings, answer_last_states) if evaluating else None),
+        **extra_analysis_dict,
     )))
 
     return analysis
@@ -455,18 +514,38 @@ def analyze(
 def compute_num_correct(predictions, answers, denotation_equal, num_return_sequences=1):
     assert len(predictions) == len(answers) * num_return_sequences
 
-    if num_return_sequences > 1:
-        num_correct = compute_num_oracle_correct(
-            predictions, answers, denotation_equal, num_return_sequences=num_return_sequences)
-    else:
-        num_correct = sum(
-            int(denotation_equal(prediction=prediction, answer=answer))
-            for prediction, answer in zip(predictions, answers))
+    num_correct = sum(map(int, compute_correctness(
+        predictions, answers, denotation_equal, num_return_sequences=num_return_sequences)))
+
+    assert num_correct <= len(answers)
 
     return num_correct
 
 
+def compute_correctness(predictions, answers, denotation_equal, num_return_sequences=1):
+    assert len(predictions) == len(answers) * num_return_sequences
+
+    if num_return_sequences > 1:
+        correctness_values = compute_oracle_correctness(
+            predictions, answers, denotation_equal, num_return_sequences=num_return_sequences)
+    else:
+        correctness_values = tuple(
+            denotation_equal(prediction=prediction, answer=answer)
+            for prediction, answer in zip(predictions, answers))
+
+    return correctness_values
+
+
 def compute_num_oracle_correct(predictions, answers, denotation_equal, num_return_sequences=1):
+    num_correct = sum(map(int, compute_oracle_correctness(
+        predictions, answers, denotation_equal, num_return_sequences=num_return_sequences)))
+
+    assert num_correct <= len(answers)
+
+    return num_correct
+
+
+def compute_oracle_correctness(predictions, answers, denotation_equal, num_return_sequences=1):
     # if not (len(predictions) == len(answers) * num_return_sequences):
     #     breakpoint()
     assert len(predictions) == len(answers) * num_return_sequences
@@ -478,14 +557,12 @@ def compute_num_oracle_correct(predictions, answers, denotation_equal, num_retur
 
     assert len(prediction_groups) == len(answers)
 
-    num_correct = sum(
-        int(any(denotation_equal(prediction=prediction, answer=answer)
-                for prediction in prediction_group))
+    correctness_values = tuple(
+        any(denotation_equal(prediction=prediction, answer=answer)
+            for prediction in prediction_group)
         for prediction_group, answer in zip(prediction_groups, answers))
 
-    assert num_correct <= len(answers)
-
-    return num_correct
+    return correctness_values
 
 
 def get_consistent_action_id_seq_groups(action_id_seqs, predictions, answers, denotation_equal, num_return_sequences):

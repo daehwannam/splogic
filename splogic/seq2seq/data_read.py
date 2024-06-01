@@ -30,12 +30,13 @@ class ExampleAttr:
     answer              = attr2str()
     answer_by_program   = attr2str()
     ws_sub_batches      = attr2str()
+    logical_form        = attr2str()
 
     # Attributes for raw examples
     action_id_seq_group = attr2str()
 
 
-def make_collate(decoder_start_token_id, pad_token_id, max_num_action_seqs):
+def make_collate(decoder_start_token_id, pad_token_id, max_num_action_seqs, extra_keys=()):
     def make_batched_long_tensor(lists):
         return torch.tensor(pad_sequence(lists, pad_token_id), dtype=torch.int64)
 
@@ -119,6 +120,8 @@ def make_collate(decoder_start_token_id, pad_token_id, max_num_action_seqs):
         else:
             ws_sub_batches = None
 
+        logical_form = batched_example.get(ExampleAttr.logical_form)
+
         return LazyDict(not_none_valued_pairs(
             [[ExampleAttr.example_id          , example_id],
              [ExampleAttr.utterance_token_ids , utterance_token_ids],
@@ -128,7 +131,10 @@ def make_collate(decoder_start_token_id, pad_token_id, max_num_action_seqs):
              [ExampleAttr.labels              , labels],
              [ExampleAttr.answer              , answer],
              [ExampleAttr.answer_by_program   , answer_by_program],
-             [ExampleAttr.ws_sub_batches      , ws_sub_batches],]
+             [ExampleAttr.ws_sub_batches      , ws_sub_batches],
+             [ExampleAttr.logical_form        , logical_form],
+             *([extra_key, batched_example[extra_key]]
+               for extra_key in extra_keys)]
         ))
 
     return collate
@@ -136,7 +142,7 @@ def make_collate(decoder_start_token_id, pad_token_id, max_num_action_seqs):
 
 def make_data_loader(
         encoded_dataset, encoded_mask_dataset=None, *, decoder_start_token_id, pad_token_id,
-        batch_size=None, shuffle, num_epoch_repeats=1, max_num_action_seqs=None
+        batch_size=None, shuffle, num_epoch_repeats=1, max_num_action_seqs=None, extra_keys=(),
 ):
     if encoded_mask_dataset is None:
         _encoded_dataset = encoded_dataset
@@ -150,7 +156,9 @@ def make_data_loader(
         **not_none_valued_dict(
             batch_size=batch_size,
             shuffle=shuffle,
-            collate_fn=make_collate(decoder_start_token_id, pad_token_id, max_num_action_seqs),
+            collate_fn=make_collate(
+                decoder_start_token_id, pad_token_id, max_num_action_seqs,
+                extra_keys=extra_keys),
         ))
 
     if num_epoch_repeats == 1:

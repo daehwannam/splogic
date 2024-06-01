@@ -187,6 +187,14 @@ def load_performance(dir_path, file_name='performance.json'):
 
 
 @accelerator.within_local_main_process
+def save_extra_performance(extra_performance, dir_path, file_name='extra_performance.json'):
+    if extra_performance is None:
+        pass
+    else:
+        raise NotImplementedError
+
+
+@accelerator.within_local_main_process
 def save_analysis(analysis, dir_path, file_name='analysis.json'):
     analysis_file_path = os.path.join(dir_path, file_name)
     filesys.json_pretty_save(analysis, analysis_file_path)

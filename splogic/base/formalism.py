@@ -132,7 +132,7 @@ class Action:
         else:
             return False
 
-    def is_union_act_type(self):
+    def has_union_act_type(self):
         return self.is_union_type(self.act_type)
 
     def __repr__(self):
@@ -280,7 +280,7 @@ class Formalism:
     @staticmethod
     def update_type_to_actions_dict(type_to_actions_dict, actions, super_types_dict, to_id=False, inferencing_subtypes=True):
         for action in actions:
-            type_q = deque(action.act_type if action.is_union_act_type() else
+            type_q = deque(action.act_type if action.has_union_act_type() else
                            [action.act_type])
             while type_q:
                 typ = type_q.popleft()
@@ -674,7 +674,7 @@ class SearchState(metaclass=ABCMeta):
             if including_candidate_ids or verifying:
                 _candidate_action_ids = state.get_candidate_action_ids()
                 if verifying and (action.id not in _candidate_action_ids):
-                    # breakpoint()
+                    breakpoint()
                     raise InvalidCandidateActionError(f'{action} is not a candidate action in the current action tree {state.tree}')
                 candidate_action_ids = _candidate_action_ids if including_candidate_ids else None
             else:

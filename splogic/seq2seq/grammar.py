@@ -153,9 +153,9 @@ class Seq2SeqGrammar(Grammar):
             using_arg_filter=using_arg_filter,
             ids_to_mask_fn=ids_to_mask_fn)
 
-    @abstractfunction
-    def get_compiler_cls(self):
-        pass
+    # @abstractfunction
+    # def get_compiler_cls(self):
+    #     pass
 
     @implement
     def iter_all_token_ids(self):

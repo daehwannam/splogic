@@ -135,14 +135,15 @@ def token_id_seqs_to_last_states(
     return predicted_last_states
 
 
-def last_states_to_programs(grammar, compiler, last_states, tolerant=False, ignoring_compilation_errors=False):
-    def state_to_program(state):
+def last_states_to_programs(grammar, compiler, last_states, dynamic_bindings, tolerant=False, ignoring_compilation_errors=False):
+    def state_to_program(state, dynamic_binding):
         if state is grammar.search_state_cls.INVALID:
             return INVALID_PROGRAM
         else:
             if state.tree.is_closed_root():
                 try:
-                    return compiler.compile_tree(state.tree, tolerant=tolerant)
+                    with grammar.dynamic_scope.let(**dynamic_binding):
+                        return compiler.compile_tree(state.tree, tolerant=tolerant)
                 except Exception as error:
                     if ignoring_compilation_errors:
                         return INVALID_PROGRAM
@@ -152,8 +153,8 @@ def last_states_to_programs(grammar, compiler, last_states, tolerant=False, igno
                 # when generation process reaches the max_length
                 return INVALID_PROGRAM
 
-    programs = tuple(state_to_program(last_state)
-                     for last_state in last_states)
+    programs = tuple(state_to_program(last_state, dynamic_binding)
+                     for last_state, dynamic_binding in zip(last_states, dynamic_bindings))
     return programs
 
 

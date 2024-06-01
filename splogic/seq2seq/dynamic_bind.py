@@ -40,23 +40,23 @@ def utterance_token_id_seq_to_span_trie(grammar, utterance_token_id_seq):
 
 class DynamicBinder(metaclass=ABCMeta):
     @abstractmethod
-    def bind(self, example):
+    def bind_example(self, example, grammar=None):
         pass
 
     @abstractmethod
-    def bind_batch(self, grammar, batched_example):
+    def bind_batch(self, batched_example, grammar=None):
         pass
 
 
 @subclass
 class NoDynamicBinder(DynamicBinder):
     @implement
-    def bind(self, grammar, example):
+    def bind_example(self, example, grammar=None):
         binding = {}
         return binding
 
     @implement
-    def bind_batch(self, grammar, batched_example):
+    def bind_batch(self, batched_example, grammar=None):
         batch_size = (len(batched_example['utterance_token_ids']) if 'utterance_token_ids' in batched_example else
                       len(batched_example[next(iter(batched_example))]))
         bindings = ({},) * batch_size
@@ -66,12 +66,12 @@ class NoDynamicBinder(DynamicBinder):
 @subclass
 class UtteranceSpanTrieDynamicBinder(DynamicBinder):
     @implement
-    def bind(self, grammar, example):
+    def bind_example(self, example, grammar=None):
         binding = dict(utterance_span_trie=utterance_token_id_seq_to_span_trie(grammar, example['utterance_token_ids']))
         return binding
 
     @implement
-    def bind_batch(self, grammar, batched_example):
+    def bind_batch(self, batched_example, grammar=None):
         bindings = tuple(
             dict(utterance_span_trie=utterance_token_id_seq_to_span_trie(grammar, utterance_token_id_seq))
             for utterance_token_id_seq in batched_example['utterance_token_ids'].tolist()

@@ -171,13 +171,13 @@ class Grammar:
     def get_search_state_cls(self):
         pass
 
-    @property
-    def compiler_cls(self):
-        return self.get_compiler_cls()
+    # @property
+    # def compiler_cls(self):
+    #     return self.get_compiler_cls()
 
-    @abstractfunction
-    def get_compiler_cls(self):
-        pass
+    # @abstractfunction
+    # def get_compiler_cls(self):
+    #     pass
 
     @abstractfunction
     def iter_all_token_ids(self):

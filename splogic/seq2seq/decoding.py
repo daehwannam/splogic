@@ -109,20 +109,26 @@ def generate_token_id_seqs(
     return token_id_seqs
 
 
+def repeat_for_multiple_returns(coll, num_return_sequences):
+    if num_return_sequences > 1:
+        _coll = tuple(iteration.repeat_in_order(
+            coll, num_return_sequences))
+    else:
+        _coll = coll
+    return _coll
+
+
 def token_id_seqs_to_last_states(
         grammar, token_id_seqs, *, ignoring_parsing_errors=False, verifying=False,
         dynamic_bindings=None,
         # utterance_token_id_seqs=None,
         num_return_sequences=1
 ):
-    if dynamic_bindings is None:
-        _dynamic_bindings = [{}] * len(token_id_seqs)
-    else:
-        if num_return_sequences > 1:
-            _dynamic_bindings = tuple(iteration.repeat_in_order(
-                dynamic_bindings, num_return_sequences))
-        else:
-            _dynamic_bindings = dynamic_bindings
+    # if dynamic_bindings is None:
+    #     _dynamic_bindings = [{}] * len(token_id_seqs)
+    # else:
+    #     _dynamic_bindings = repeat_for_multiple_returns(dynamic_bindings, num_return_sequences)
+    _dynamic_bindings = repeat_for_multiple_returns(dynamic_bindings, num_return_sequences)
 
     assert len(token_id_seqs) == len(_dynamic_bindings)
 
@@ -135,7 +141,8 @@ def token_id_seqs_to_last_states(
     return predicted_last_states
 
 
-def last_states_to_programs(grammar, compiler, last_states, dynamic_bindings, tolerant=False, ignoring_compilation_errors=False):
+def last_states_to_programs(grammar, compiler, last_states, dynamic_bindings, num_return_sequences=1,
+                            tolerant=False, ignoring_compilation_errors=False):
     def state_to_program(state, dynamic_binding):
         if state is grammar.search_state_cls.INVALID:
             return INVALID_PROGRAM
@@ -153,8 +160,11 @@ def last_states_to_programs(grammar, compiler, last_states, dynamic_bindings, to
                 # when generation process reaches the max_length
                 return INVALID_PROGRAM
 
+    _dynamic_bindings = repeat_for_multiple_returns(dynamic_bindings, num_return_sequences)
+    assert len(last_states) == len(_dynamic_bindings)
+
     programs = tuple(state_to_program(last_state, dynamic_binding)
-                     for last_state, dynamic_binding in zip(last_states, dynamic_bindings))
+                     for last_state, dynamic_binding in zip(last_states, _dynamic_bindings))
     return programs
 
 

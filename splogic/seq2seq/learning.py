@@ -131,7 +131,7 @@ def labels_to_nll_mask(grammar, labels, except_eos=False):
     return nll_mask
 
 
-def compute_nll_loss(logits, labels, softmax_mask=None, nll_mask=None):
+def compute_nll_loss(logits, labels, averaging, softmax_mask=None, nll_mask=None):
     """
     Compute a negative log likelihood loss
     """
@@ -149,7 +149,8 @@ def compute_nll_loss(logits, labels, softmax_mask=None, nll_mask=None):
     else:
         masked_nll = nll * nll_mask.to(nll.device)
 
-    loss = masked_nll.sum(dim=-1).mean(dim=0)
+    _loss = masked_nll.sum(dim=-1)
+    loss = _loss.mean(dim=0) if averaging else _loss.sum(dim=0)
 
     return loss
 
@@ -182,8 +183,11 @@ def compute_nlml_loss(logits, labels, nll_mask, group_lengths, averaging):
     return loss
 
 
-def ss_forward_backward(grammar, model, batch, softmax_masking):
+def ss_forward_backward(grammar, model, batch, softmax_masking, batch_size=None):
     "Strong-supervision update"
+
+    if batch_size is None:
+        batch_size = len(batch['example_id'])
 
     batched_input = dict(
         input_ids=batch['utterance_token_ids'].to(accelerator.device),
@@ -203,19 +207,21 @@ def ss_forward_backward(grammar, model, batch, softmax_masking):
     loss = compute_nll_loss(
         logits=logits,
         labels=labels,
+        averaging=False,
         softmax_mask=softmax_mask,
         nll_mask=nll_mask,
-    )
+    ) / batch_size
 
     accelerator.backward(loss)
 
     return loss.item()
 
 
-def ws_forward_backward(grammar, model, batch):
+def ws_forward_backward(grammar, model, batch, batch_size=None):
     "Weak-supervision update"
 
-    batch_size = len(batch['example_id'])
+    if batch_size is None:
+        batch_size = len(batch['example_id'])
 
     batch_loss = 0
 

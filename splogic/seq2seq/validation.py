@@ -299,10 +299,14 @@ class Validator:
             )
             programs = decoding.last_states_to_programs(
                 grammar, self.compiler, last_states, dynamic_bindings,
+                num_return_sequences=num_return_sequences,
                 tolerant=True, ignoring_compilation_errors=ignoring_errors)
 
             num_all_examples += batch['utterance_token_ids'].shape[0]
-            exec_result = self.executor.execute(programs=programs, contexts=self.context_creator(batch))
+            exec_result = self.executor.execute(
+                programs=programs,
+                contexts=decoding.repeat_for_multiple_returns(
+                    self.context_creator(batch), num_return_sequences))
             # exec_result = executor.execute(programs=programs, contexts=(context,) * len(programs))
             # predictions = learning.programs_to_predictions(context, programs, strict_postprocessing=strict_postprocessing)
 
@@ -472,14 +476,15 @@ def analyze(
             else:
                 return None
 
-    def analyze_program(dynamic_bindings, last_states, token_id_seqs=None):
+    def analyze_program(dynamic_bindings, last_states, token_id_seqs=None, num_return_sequences=1):
+        _dynamic_bindings = decoding.repeat_for_multiple_returns(dynamic_bindings, num_return_sequences)
         program_analysis = list(pairs2dicts(not_none_valued_pairs(
             tokens=list(map(grammar.lf_tokenizer.convert_ids_to_tokens, token_id_seqs)) if token_id_seqs is not None else None,
             action_seq=list(map(get_action_seq, last_states)),
             tree=list(map(get_tree_repr, last_states)),
-            expr=list(map(get_expr_str, dynamic_bindings, last_states)),
+            expr=list(map(get_expr_str, _dynamic_bindings, last_states)),
             # visual_expr=list(map(lambda last_state: get_expr_str(last_state, expr_key='visual'), last_states)),
-            visual_expr=list(map(partial(get_expr_str, expr_key='visual'), dynamic_bindings, last_states)),
+            visual_expr=list(map(partial(get_expr_str, expr_key='visual'), _dynamic_bindings, last_states)),
         )))
         return program_analysis
 
@@ -503,7 +508,8 @@ def analyze(
         prediction=group_predictions_conditionally(predictions),
         correct=correct_list,
         predicted_program=group_predictions_conditionally(
-            analyze_program(dynamic_bindings, predicted_last_states, predicted_token_id_seqs)),
+            analyze_program(dynamic_bindings, predicted_last_states, predicted_token_id_seqs,
+                            num_return_sequences=num_return_sequences)),
         answer_program=(analyze_program(dynamic_bindings, answer_last_states) if evaluating else None),
         **extra_analysis_dict,
     )))

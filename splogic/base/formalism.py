@@ -674,7 +674,7 @@ class SearchState(metaclass=ABCMeta):
             if including_candidate_ids or verifying:
                 _candidate_action_ids = state.get_candidate_action_ids()
                 if verifying and (action.id not in _candidate_action_ids):
-                    breakpoint()
+                    # breakpoint()
                     raise InvalidCandidateActionError(f'{action} is not a candidate action in the current action tree {state.tree}')
                 candidate_action_ids = _candidate_action_ids if including_candidate_ids else None
             else:

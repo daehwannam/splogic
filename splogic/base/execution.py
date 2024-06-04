@@ -214,7 +214,7 @@ class SingletonContextCreater(ContextCreater):
         batch_size = len(batch['utterance_token_ids'])
         if self._context is NO_VALUE:
             self.context = self.context_fn()
-        return (self.context) * batch_size
+        return (self.context,) * batch_size
 
 
 @notimplemented

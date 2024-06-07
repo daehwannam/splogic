@@ -18,7 +18,7 @@ from dhnamlib.pylib.time import TimeMeasure
 # from dhnamlib.pylib.klass import subclass, implement, abstractfunction
 from dhnamlib.pylib.klass import subclass, implement
 from dhnamlib.pylib.torchlib.dnn import unpad_sequence
-from dhnamlib.pylib.mllib.learning import get_performance
+from dhnamlib.pylib.mllib.learning import get_measure, get_performance
 # from dhnamlib.pylib.torchlib.optimization import get_linear_schedule_with_warmup
 from dhnamlib.pylib.structure import XNamespace
 from dhnamlib.pylib.hflib.acceleration import alternate_object
@@ -39,6 +39,9 @@ from . import decoding
 
 
 # denotation_equal = LazyProxy(lambda: coc.domain.evaluate.denotation_equal)
+
+DEFAULT_OPTIM_MEASURES = [get_measure('accuracy', True), get_measure('accuracy_fraction', True)]
+DEFAULT_SEARCH_MEASURES = [get_measure('oracle_accuracy', True), get_measure('oracle_accuracy_fraction', True)]
 
 
 class DenotationEqual(metaclass=ABCMeta):
@@ -182,6 +185,7 @@ class Validator:
             evaluating,
             using_oracle=False,
             collecting_weaksup_examples=False,
+            extra_weaksup_collection_keys=[],
             # strict_postprocessing=False,
             ignoring_parsing_errors=True,
             measure_name='accuracy',
@@ -220,6 +224,7 @@ class Validator:
 
         if collecting_weaksup_examples:
             xns.all_utterance_token_id_seqs = []
+            xns.extra_weaksup_collection_value_dict = {}
 
         if evaluating and self.evaluating_in_progress:
             tqdm_fn = utqdm
@@ -348,6 +353,10 @@ class Validator:
                 xns.all_utterance_token_id_seqs.extend(unpad_sequence(
                     batch['utterance_token_ids'].tolist(), grammar.lf_tokenizer.pad_token_id))
 
+                for key in extra_weaksup_collection_keys:
+                    xns.extra_weaksup_collection_value_dict.setdefault(key, []).extend(batch[key])
+                    
+
         # coc.logger.info('All decoding time: {} second'.format(all_decoding_time))
         # print('All decoding time: {} second'.format(all_decoding_time))  # DEBUG for time measure
         # import sys; sys.exit(0)      # DEBUG for time measure
@@ -372,12 +381,15 @@ class Validator:
                     self.denotation_equal,
                     num_return_sequences)
 
+                extra_weaksup_collection_value_dict = xns.pop(extra_weaksup_collection_value_dict=True)
+
                 weaksup_examples = tuple(
                     example for example in pairs2dicts(
                         example_id=xns.pop(all_example_ids=not analyzing),
                         utterance_token_ids=xns.pop(all_utterance_token_id_seqs=True),
                         answer=result_collector.answers,
-                        action_id_seq_group=consistent_action_id_seq_groups)
+                        action_id_seq_group=consistent_action_id_seq_groups,
+                        **extra_weaksup_collection_value_dict)
                     if len(example['action_id_seq_group']) > 0
                 )
                 overall_weaksup_examples = sorted(gather_object(weaksup_examples), key=lambda example: example['example_id'])

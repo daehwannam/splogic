@@ -19,7 +19,7 @@ from transformers import BartTokenizer, BartForConditionalGeneration, BartConfig
 
 from dhnamlib.pylib import filesys
 from dhnamlib.pylib.decoration import curry
-from dhnamlib.pylib.mllib.learning import get_measure, CheckpointManager
+from dhnamlib.pylib.mllib.learning import CheckpointManager
 from dhnamlib.pylib.context import must_skipped, skip_if_possible
 
 from splogic.utility.acceleration import accelerator
@@ -140,10 +140,6 @@ def save_scheduler(scheduler, dir_path):
 
 def load_and_update_scheduler(scheduler, dir_path):
     scheduler.load_state_dict(torch.load(get_scheduler_file_path(dir_path)))
-
-
-optim_measures = [get_measure('accuracy', True), get_measure('accuracy_fraction', True)]
-search_measures = [get_measure('oracle_accuracy', True), get_measure('oracle_accuracy_fraction', True)]
 
 
 STATUS_FILE_NAME = 'status.json'

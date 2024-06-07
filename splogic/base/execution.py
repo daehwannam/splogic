@@ -156,7 +156,7 @@ class LazyExecResult(ExecResult):
 
     @implement
     def is_done(self) -> bool:
-        return hasattr(self, '_values')
+        return self._values is not NO_VALUE
 
     # def post_process(self, value):
     #     return value

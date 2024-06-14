@@ -293,6 +293,7 @@ class Validator:
             all_decoding_time += tm.elapse()
             # continue                # DEBUG for time measure
 
+            # breakpoint()
             ignoring_errors = ignoring_parsing_errors or not (
                 constrained_decoding and using_arg_candidate and using_distinctive_union_types)
             last_states = decoding.token_id_seqs_to_last_states(

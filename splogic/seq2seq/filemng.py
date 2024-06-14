@@ -164,14 +164,14 @@ def load_status(dir_path, file_name=STATUS_FILE_NAME, default=NO_DEFAULT):
 
 
 @accelerator.within_local_main_process
-def save_performance(performance, dir_path, file_name='performance.json'):
+def save_performance(performance, dir_path, file_name='performance.json', value_format='{:5.2f}'):
     filesys.extended_json_pretty_save(performance, os.path.join(dir_path, file_name))
 
     updated_performance = dict(performance)
     if 'accuracy' in performance:
-        updated_performance.update(accuracy_percent='{:5.2f}'.format(performance['accuracy'] * 100))
+        updated_performance.update(accuracy_percent=value_format.format(performance['accuracy'] * 100))
     if 'oracle_accuracy' in performance:
-        updated_performance.update(oracle_accuracy_percent='{:5.2f}'.format(performance['oracle_accuracy'] * 100))
+        updated_performance.update(oracle_accuracy_percent=value_format.format(performance['oracle_accuracy'] * 100))
 
     name, extension = os.path.splitext(file_name)
     new_file_name = f'{name}-visual{extension}'
@@ -220,3 +220,9 @@ def save_weaksup_dataset(weaksup_dataset, dir_path, file_name=WEAKSUP_FILE_NAME)
 def load_weaksup_dataset(dir_path, file_name=WEAKSUP_FILE_NAME):
     weaksup_dataset_file_path = os.path.join(dir_path, file_name)
     return filesys.jsonl_load(weaksup_dataset_file_path)
+
+
+class BaseFileManager:
+    save_analysis = staticmethod(save_analysis)
+    save_extra_performance = staticmethod(save_extra_performance)
+    save_performance = staticmethod(save_performance)

@@ -228,12 +228,15 @@ class MetaAction:
 class Formalism:
     """Formalism"""
 
-    def __init__(self, default_expr_key='default'):
+    def __init__(self, default_expr_key='default', decoding_speed_optimization=True):
         self.default_expr_key = default_expr_key
         self.reduce_action = Action(name='reduce',
                                     act_type='reduce-type',
                                     param_types=[],
                                     expr_dict={self.default_expr_key: ''})
+        self.decoding_speed_optimization = decoding_speed_optimization
+        if not decoding_speed_optimization:
+            self.get_allowed_and_ids_pairs = self._get_allowed_and_ids_pairs__non_optimized
 
     @staticmethod
     def check_action_name_overlap(actions, meta=False):
@@ -412,6 +415,16 @@ class Formalism:
             disallowed_ids = self.get_disallowed_ids(
                 param_type, type_to_candidates_dicts, optionally_reducible, all_token_id_set)
             return False, disallowed_ids
+
+    def _get_allowed_and_ids_pairs__non_optimized(self, opened_action, current_num_args, type_to_candidates_dicts, all_token_id_set, threshold):
+        next_param_idx = self._get_next_param_idx(opened_action, current_num_args)
+        param_type = opened_action.param_types[next_param_idx]
+
+        optionally_reducible = Formalism._optionally_reducible(opened_action, current_num_args)
+        candidate_ids = self._get_candidates_from_cache(
+            param_type, type_to_candidates_dicts, optionally_reducible, to_id=True)
+
+        return True, candidate_ids
 
     def extend_actions(self, actions, use_reduce=True):
         if use_reduce:

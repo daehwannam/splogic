@@ -72,6 +72,7 @@ class Seq2SeqGrammar(Grammar):
         self.nl_token_meta_arg_name = nl_token_meta_arg_name
 
         self.dynamic_scope = dynamic_scope
+        self.using_distinctive_union_types = using_distinctive_union_types
         self.model_config = filemng.load_model_config(pretrained_model_name_or_path)
         self.initialize_from_base_actions()
         self.register_all()

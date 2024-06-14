@@ -6,6 +6,7 @@ from collections import deque
 
 from dhnamlib.pylib.hflib.transforming import iter_default_non_special_tokens
 from dhnamlib.pylib.klass import abstractfunction
+from dhnamlib.pylib.iteration import flatten
 
 
 class TokenProcessing:
@@ -142,7 +143,13 @@ class StrictTypeProcessing:
                          expr_dict=dict(default='{0}'))
 
     @staticmethod
-    def get_strictly_typed_action_seq(grammar, action_name_seq, dynamic_binding={}):
+    def get_strictly_typed_action_tree(grammar, action_name_tree, dynamic_binding={}):
+        return StrictTypeProcessing.get_strictly_typed_action_seq(
+            grammar=grammar, action_name_seq=flatten(action_name_tree),
+            dynamic_binding=dynamic_binding, return_tree=True)
+
+    @staticmethod
+    def get_strictly_typed_action_seq(grammar, action_name_seq, dynamic_binding={}, return_tree=False):
         assert grammar.inferencing_subtypes is False
 
         input_action_seq = tuple(map(grammar.name_to_action, action_name_seq))
@@ -197,4 +204,12 @@ class StrictTypeProcessing:
                 output_action_seq.append(expected_action)
                 state = state.get_next_state(expected_action)
 
-        return output_action_seq
+        if return_tree:
+            assert len(state.tree.children) == 1
+            # Assume state.tree.value is the start action, such as `program`.
+            # The start action takes only one argument.
+
+            output_action_tree = state.tree.children[0].get_value_tree()
+            return output_action_tree
+        else:
+            return output_action_seq

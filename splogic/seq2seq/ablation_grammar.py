@@ -1,6 +1,7 @@
 
 from itertools import chain
 from functools import cache
+from copy import copy
 from dhnamlib.pylib.klass import subclass, override
 from dhnamlib.pylib.klass import deprecated
 # from dhnamlib.pylib.klass import subclass, override, implement, abstractfunction
@@ -17,6 +18,7 @@ def make_ablation_grammar_cls(grammar_cls):
                 self, *,
                 non_symbolic=False, is_symbolic_action=None,
                 using_common_nl_token_seq=False, is_nl_token_seq_action=None, common_nl_token_seq_expr_dict=None,
+                naive_arg_ordering=False,
                 **kwargs
         ):
             if non_symbolic:
@@ -25,14 +27,14 @@ def make_ablation_grammar_cls(grammar_cls):
                 assert is_nl_token_seq_action is not None
                 assert common_nl_token_seq_expr_dict is not None
 
-            assert non_symbolic or using_common_nl_token_seq
+            assert non_symbolic or using_common_nl_token_seq or naive_arg_ordering
 
             self.non_symbolic = non_symbolic
             self.is_symbolic_action = is_symbolic_action
             self.using_common_nl_token_seq = using_common_nl_token_seq
             self.is_nl_token_seq_action = is_nl_token_seq_action
             self.common_nl_token_seq_expr_dict = common_nl_token_seq_expr_dict
-
+            self.naive_arg_ordering = naive_arg_ordering
 
             # self._symbol_beg = self.convert_name_to_action('(nl-token Ġ<)')
             # self._symbol_end = self.convert_name_to_action('(nl-token Ġ>)')
@@ -49,6 +51,9 @@ def make_ablation_grammar_cls(grammar_cls):
 
             # _actions = list(action for action in kwargs['actions'] if not is_symbolic_action(action))
             _actions = list(kwargs['actions'])
+            if naive_arg_ordering:
+                self._naive_arg_order_action_names = set()
+                _actions = list(map(self._apply_naive_arg_ordering, _actions))
             _actions.extend([self._symbol_beg_action, self._symbol_end_action, self._common_nl_token_seq_action])
             _kwargs = dict(kwargs)
             _kwargs['actions'] = _actions
@@ -106,6 +111,8 @@ def make_ablation_grammar_cls(grammar_cls):
 
         def convert_to_ablation_action_tree(self, original_action_tree):
             action_tree = original_action_tree
+            if self.naive_arg_ordering:
+                action_tree = self._add_naive_arg_ordering_to_tree(action_tree)
             if self.non_symbolic:
                 action_tree = self._add_non_symbolic_actions_to_tree(action_tree)
             if self.using_common_nl_token_seq:
@@ -155,6 +162,25 @@ def make_ablation_grammar_cls(grammar_cls):
             ablation_action_tree = rmap(convert_action, original_action_tree)
             return ablation_action_tree
 
+        def _add_naive_arg_ordering_to_tree(self, original_action_tree):
+
+            def recurse(tree):
+                if isinstance(tree, (tuple, list)):
+                    parent, *children = tree
+                    if self._is_naive_arg_order_action(parent):
+                        parent._original_arg_indices
+                        # _children = [None] * len(children)
+                        # for idx, child in zip(parent._original_arg_indices, children):
+                        #     _children[idx] = child
+                        _children = tuple(children[idx] for idx in parent._original_arg_indices)
+                    else:
+                        _children = children
+                    return (parent,) + tuple(map(recurse, _children))
+                else:
+                    return tree
+
+            return recurse(original_action_tree)
+
         # @cache
         # @override
         # def get_name_to_id_dicts(self):
@@ -168,6 +194,64 @@ def make_ablation_grammar_cls(grammar_cls):
         #          [self._symbol_end_action.name, self._symbol_end_action.id]])
         #     name_to_id_dicts.append(added_name_to_id_dict)
         #     return name_to_id_dicts
+
+        def _apply_naive_arg_ordering(self, action):
+
+            default_expr_key = 'default'
+            visual_expr_key = 'visual'
+
+            def get_arg_indices(expr_template):
+                return tuple(
+                    int(match_obj.group(1))
+                    for match_obj in Action._place_holder_regex.finditer(expr_template))
+
+            default_expr_template = action.expr_dict[default_expr_key]
+
+            if callable(default_expr_template):
+                return action
+            else:
+                default_expr_arg_indices = get_arg_indices(default_expr_template)
+                sorted_default_expr_arg_indices = tuple(sorted(default_expr_arg_indices))
+                if default_expr_arg_indices == sorted_default_expr_arg_indices:
+                    return action
+                else:
+                    new_action = copy(action)
+                    new_action._original_expr_dict = action.expr_dict
+                    new_action._original_arg_indices = default_expr_arg_indices
+
+                    new_param_types = tuple(
+                        action.param_types[arg_index]
+                        for arg_index in default_expr_arg_indices)
+                    new_action.param_types = new_param_types
+
+                    def change_expr_template(template):
+                        # expr_arg_indices = get_arg_indices(template)
+                        redirected_indices = [None] * len(default_expr_arg_indices)
+                        for new_idx, expr_arg_idx in enumerate(default_expr_arg_indices):
+                            redirected_indices[expr_arg_idx] = new_idx
+                        return template.format(*(('{' + str(new_idx) + '}') for new_idx in redirected_indices))
+
+                    new_expr_dict = {}
+                    new_expr_dict[default_expr_key] = change_expr_template(action.expr_dict[default_expr_key])
+                    # print(new_expr_dict[default_expr_key])
+
+                    visual_expr_template = action.expr_dict[visual_expr_key]
+                    if (visual_expr_template is not None) and (not callable(visual_expr_template)):
+                        # visual_expr_arg_indices = get_arg_indices(visual_expr_template)
+                        # assert default_expr_arg_indices == visual_expr_arg_indices
+                        new_expr_dict[visual_expr_key] = change_expr_template(action.expr_dict[visual_expr_key])
+                    new_action.expr_dict = new_expr_dict
+                    new_action.expr_pieces_dict = Action.get_expr_pieces_dict(new_expr_dict)
+
+                    self._naive_arg_order_action_names.add(new_action.name)
+                    return new_action
+
+        def _is_naive_arg_order_action(self, action):
+            return action.name in self._naive_arg_order_action_names
+
+# TODO
+# - def is_arg_reordered_action_name
+# - def _convert_to_naive_arg_order_tree
 
     return AblationSeq2SeqGrammar
 

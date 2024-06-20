@@ -68,6 +68,10 @@ class Action:
     _place_holder_regex = re.compile(r'{(([0-9]+)|([_a-zA-Z][_a-zA-Z0-9]*))}')
 
     class PieceKey:
+        """
+        A PieceKey object has `value` which indicates the index of an argument of an action.
+        """
+
         def __init__(self, value):
             self.value = value
 
@@ -76,6 +80,11 @@ class Action:
 
     @classmethod
     def get_expr_pieces_dict(cls, expr_dict):
+        # In `str.format` function, '{{' and '}}' are considered as the raw characters or '{' and '}'.
+        # e.g.
+        # >>> '{} = {{{}}}'.format('x', '1, 2, 3')
+        # 'x = {1, 2, 3}'
+
         def replace_brackets_with_symbols(text):
             return text.replace(
                 '{{', cls._raw_left_curly_bracket_symbol).replace(
@@ -95,7 +104,7 @@ class Action:
             if len(span_piece_key_pairs) == 0:
                 yield expr
             else:
-                spans, piece_keys = zip(*iter_span_piece_key_pairs(replace_brackets_with_symbols(expr)))
+                spans, piece_keys = zip(*span_piece_key_pairs)
                 splits = split_by_indices(expr, chainelems(spans), including_end_index=False)
                 for idx, split in enumerate(splits):
                     if idx % 2 == 1:

@@ -1,4 +1,6 @@
 
+import warnings
+
 from itertools import chain
 from functools import cache
 from copy import copy
@@ -27,7 +29,9 @@ def make_ablation_grammar_cls(grammar_cls):
                 assert is_nl_token_seq_action is not None
                 assert common_nl_token_seq_expr_dict is not None
 
-            assert non_symbolic or using_common_nl_token_seq or naive_arg_ordering
+            # assert non_symbolic or using_common_nl_token_seq or naive_arg_ordering
+            if not (non_symbolic or using_common_nl_token_seq or naive_arg_ordering):
+                warnings.warn('No ablation option is provided.')
 
             self.non_symbolic = non_symbolic
             self.is_symbolic_action = is_symbolic_action

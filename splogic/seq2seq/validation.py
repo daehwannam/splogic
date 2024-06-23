@@ -134,6 +134,8 @@ class ResultCollector:
             overall_accuracy_fraction = Fraction(overall_num_correct, overall_num_answers)
             measure_kv_list.append([accuracy_measure_name, overall_accuracy])
             measure_kv_list.append([f'{accuracy_measure_name}_fraction', overall_accuracy_fraction])
+            # measure_kv_list.append(['num_correct', overall_num_correct])
+            # measure_kv_list.append(['num_examples', overall_num_answers])
 
         assert len(measure_names) == measure_cnt
 

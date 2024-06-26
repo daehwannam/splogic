@@ -9,7 +9,7 @@ from dhnamlib.pylib.torchlib.dnn import (
 from dhnamlib.pylib.torchlib.data_processing import SimpleDataset, EpochRepeatingDataLoader
 # from dhnamlib.pylib.iteration import keys2items
 from dhnamlib.pylib.iteration import (
-    dicts2pairs, not_none_valued_pairs, merge_dicts, unique, not_none_valued_dict, slice_by_max_size
+    dicts2pairs, not_none_valued_pairs, merge_dicts, unique, not_none_valued_dict, slice_by_max_size, flatten
 )
 # from dhnamlib.pylib.decoration import deprecated
 from dhnamlib.pylib.decoration import construct, attr2str
@@ -24,6 +24,7 @@ class ExampleAttr:
     example_id          = attr2str()
     utterance_token_ids = attr2str()
     action_ids          = attr2str()
+    action_id_tree      = attr2str()
     attention_mask      = attr2str()
     decoder_input_ids   = attr2str()
     labels              = attr2str()
@@ -96,8 +97,13 @@ def make_collate(decoder_start_token_id, pad_token_id, max_num_action_seqs, extr
         utterance_token_ids = LazyEval(lambda: make_batched_long_tensor(batched_example[ExampleAttr.utterance_token_ids]))
         attention_mask = LazyEval(lambda: id_tensor_to_mask(utterance_token_ids.get(), pad_token_id))
 
-        if ExampleAttr.action_ids in batched_example:
-            _action_ids = make_batched_long_tensor(batched_example[ExampleAttr.action_ids])
+        if (ExampleAttr.action_ids in batched_example) or (ExampleAttr.action_id_tree in batched_example):
+            if ExampleAttr.action_ids in batched_example:
+                _action_ids = make_batched_long_tensor(batched_example[ExampleAttr.action_ids])
+            else:
+                assert ExampleAttr.action_id_tree in batched_example
+                _action_ids = make_batched_long_tensor(tuple(map(flatten, batched_example[ExampleAttr.action_id_tree])))
+
             action_ids = prepend_decoder_start_token_id(_action_ids)
             # `action_ids[some_index]` is a sequence like
             # [decoder_start_token_id, bos_token_id, ..., some-token-id, ..., eos_token_id, pad_token_id, pad_token_id, ...]

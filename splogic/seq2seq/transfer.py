@@ -143,21 +143,23 @@ class StrictTypeProcessing:
                          expr_dict=dict(default='{0}'))
 
     @staticmethod
-    def get_strictly_typed_action_tree(grammar, action_name_tree, dynamic_binding={}):
+    def get_strictly_typed_action_tree(grammar, action_name_tree, dynamic_binding={}, including_start_action=False):
         return StrictTypeProcessing.get_strictly_typed_action_seq(
             grammar=grammar, action_name_seq=flatten(action_name_tree),
-            dynamic_binding=dynamic_binding, return_tree=True)
+            dynamic_binding=dynamic_binding, return_tree=True,
+            including_start_action=including_start_action)
 
     @staticmethod
-    def get_strictly_typed_action_seq(grammar, action_name_seq, dynamic_binding={}, return_tree=False):
+    def get_strictly_typed_action_seq(grammar, action_name_seq, dynamic_binding={}, return_tree=False, including_start_action=False):
         assert grammar.inferencing_subtypes is False
 
         input_action_seq = tuple(map(grammar.name_to_action, action_name_seq))
         num_processed_actions = 0
-        output_action_seq = []
+        _output_action_seq = []
 
         def find_super_to_sub_type_seq(super_type, sub_type):
             type_seq_q = deque([typ] for typ in grammar.super_types_dict[sub_type])
+            type_seqs = []
             while type_seq_q:
                 type_seq = type_seq_q.popleft()
                 last_type = type_seq[-1]
@@ -169,11 +171,17 @@ class StrictTypeProcessing:
                         [_type_seq[0]],
                         filter(grammar.is_non_conceptual_type, _type_seq[1: -1]),
                         [_type_seq[-1]]))
-                    return type_seq
+                    type_seqs.append(type_seq)
                 else:
-                    type_seq_q.extend(type_seq + [typ] for typ in grammar.super_types_dict[last_type])
-            else:
+                    if last_type in grammar.super_types_dict:
+                        type_seq_q.extend(type_seq + [typ] for typ in grammar.super_types_dict[last_type])
+
+            if len(type_seqs) == 0:
                 raise Exception('Cannot find the type sequence')
+            elif len(type_seqs) > 1:
+                raise Exception('There are multiple type sequence')
+            else:
+                return type_seqs[0]
 
         state = grammar.search_state_cls.create()
         while not state.tree.is_closed_root():
@@ -186,7 +194,7 @@ class StrictTypeProcessing:
             with grammar.dynamic_scope.let(**dynamic_binding):
                 candidate_action_ids = state.get_candidate_action_ids()
             if expected_action.id in candidate_action_ids:
-                output_action_seq.append(expected_action)
+                _output_action_seq.append(expected_action)
                 state = state.get_next_state(expected_action)
             else:
                 opened_tree, children = state.tree.get_opened_tree_children()
@@ -200,8 +208,8 @@ class StrictTypeProcessing:
                     action_name = f'{lhs_type}-to-{rhs_type}'
                     intermediate_action = grammar.name_to_action(action_name)
                     state = state.get_next_state(intermediate_action)
-                    output_action_seq.append(intermediate_action)
-                output_action_seq.append(expected_action)
+                    _output_action_seq.append(intermediate_action)
+                _output_action_seq.append(expected_action)
                 state = state.get_next_state(expected_action)
 
         if return_tree:
@@ -209,7 +217,19 @@ class StrictTypeProcessing:
             # Assume state.tree.value is the start action, such as `program`.
             # The start action takes only one argument.
 
-            output_action_tree = state.tree.children[0].get_value_tree()
+            _output_action_tree = tuple(child.get_value_tree() for child in state.tree.children)
+            if including_start_action:
+                output_action_tree = (grammar.start_action,) + _output_action_tree
+            else:
+                if len(state.tree.children) == 1:
+                    output_action_tree = _output_action_tree[0]
+                else:
+                    assert len(state.tree.children) > 1
+                    output_action_tree = _output_action_tree
             return output_action_tree
         else:
+            if including_start_action:
+                output_action_seq = [grammar.start_action] + _output_action_seq
+            else:
+                output_action_seq = _output_action_seq
             return output_action_seq

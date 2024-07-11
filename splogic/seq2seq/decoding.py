@@ -1,5 +1,5 @@
 
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Union
 import math
 
 import torch
@@ -7,12 +7,14 @@ import transformers
 
 from splogic.base.formalism import InvalidCandidateActionError
 from splogic.base.execution import INVALID_PROGRAM
+from splogic.utility.acceleration import accelerator
 
 from dhnamlib.pylib.hflib.transforming import logit_rescaling
 from dhnamlib.pylib import iteration
 from dhnamlib.pylib.exception import NotFoundError
 from dhnamlib.pylib.data_structure import FIFODict
 from dhnamlib.pylib.torchlib.dnn import unpad_sequence
+from dhnamlib.pylib.decoration import deprecated
 
 # from .execution import postprocess_prediction, invalid_program, get_counting_context
 
@@ -198,6 +200,15 @@ class SequencePrefixProcessor:
         self.vocab_size = len(grammar.lf_tokenizer)
         self.additional_mask_cache = additional_mask_cache
 
+        self.bos_submask = self.get_one_hot_submask(self.BOS_TOKEN_ID)
+        self.eos_submask = self.get_one_hot_submask(self.EOS_TOKEN_ID)
+        self.pad_submask = self.get_one_hot_submask(self.PAD_TOKEN_ID)
+
+    def get_one_hot_submask(self, index):
+        submask = torch.full((self.vocab_size,), -math.inf, device=accelerator.device)
+        submask[index] = 0
+        return submask
+
     def action_id_seq_to_state(self, action_id_seq):
         assert isinstance(action_id_seq, tuple)
 
@@ -249,6 +260,38 @@ class SequencePrefixProcessor:
             self.state_fifo_dict[action_id_seq] = curr_state
             return curr_state
 
+    def prefix_allowed_ids_or_submask_fn(self, batch_id: int, prefix_token_id_seq: torch.Tensor) -> List[int]:
+        _prefix_token_id_seq = prefix_token_id_seq.tolist()
+
+        if len(_prefix_token_id_seq) == 1:
+            # when `_prefix_token_id_seq` has only `self.DECODER_START_TOKEN_ID`
+            return self.bos_submask
+        else:
+            decoder_start_token_id, bos_token_id, *action_id_seq = _prefix_token_id_seq
+            assert decoder_start_token_id == self.DECODER_START_TOKEN_ID
+            assert bos_token_id == self.BOS_TOKEN_ID
+
+            last_token_id = _prefix_token_id_seq[-1]
+            if last_token_id in [self.PAD_TOKEN_ID, self.EOS_TOKEN_ID]:
+                self.state_fifo_dict[tuple(action_id_seq)] = self.grammar.search_state_cls.END
+                return self.pad_submask
+            else:
+                # decoder_start_token_id, bos_token_id, *action_id_seq = _prefix_token_id_seq
+                # assert decoder_start_token_id == self.DECODER_START_TOKEN_ID
+                # assert bos_token_id == self.BOS_TOKEN_ID
+
+                with self.grammar.dynamic_scope.let(**self.dynamic_bindings[batch_id]):
+                    curr_state = self.action_id_seq_to_state(tuple(action_id_seq))
+
+                if curr_state is self.grammar.search_state_cls.INVALID:
+                    return []
+                elif curr_state.tree.is_closed_root():
+                    return self.eos_submask
+                else:
+                    with self.grammar.dynamic_scope.let(**self.dynamic_bindings[batch_id]):
+                        return curr_state.get_allowed_ids_or_submask(accelerator.device)
+
+    @deprecated
     def prefix_allowed_and_ids_pair_fn(self, batch_id: int, prefix_token_id_seq: torch.Tensor) -> List[int]:
         _prefix_token_id_seq = prefix_token_id_seq.tolist()
 
@@ -301,9 +344,9 @@ class SequencePrefixProcessor:
 def get_logits_processor(grammar, batch_size, num_beams, renormalizing, dynamic_bindings):
     '''logits processor for constrained decoding'''
     sequence_prefix_processor = SequencePrefixProcessor(grammar, batch_size, num_beams, dynamic_bindings)
-    prefix_allowed_and_ids_pair_fn = sequence_prefix_processor.prefix_allowed_and_ids_pair_fn
-    fast_prefix_constrained_logits_processor = FastPrefixConstrainedLogitsProcessor(
-        prefix_allowed_and_ids_pair_fn, num_beams=num_beams)
+    prefix_allowed_ids_or_submask_fn = sequence_prefix_processor.prefix_allowed_ids_or_submask_fn
+    fast_prefix_constrained_logits_processor = CachedPrefixConstrainedLogitsProcessor(
+        prefix_allowed_ids_or_submask_fn, num_beams=num_beams)
     if renormalizing:
         fast_prefix_constrained_logits_processor = logit_rescaling(
             fast_prefix_constrained_logits_processor, postprocessing_nan=(num_beams > 1))
@@ -311,7 +354,39 @@ def get_logits_processor(grammar, batch_size, num_beams, renormalizing, dynamic_
     return logits_processor
 
 
-class FastPrefixConstrainedLogitsProcessor(transformers.LogitsProcessor):
+class CachedPrefixConstrainedLogitsProcessor(transformers.LogitsProcessor):
+    r"""
+    [`LogitsProcessor`] that enforces constrained generation and is useful for prefix-conditioned constrained
+    generation. This class is modified from `transformers.PrefixConstrainedLogitsProcessor`.
+
+    Args:
+        prefix_allowed_ids_or_submask_fn: (`Callable[[int, torch.Tensor], Union[Tuple[bool, List[int]], torch.Tensor]]`):
+            This function constraints the beam search to allowed tokens only at each step.
+            This function takes 2 arguments `batch_id` and `inputs_ids`. It has to return token ids or a submask.
+    """
+
+    def __init__(self, prefix_allowed_ids_or_submask_fn: Callable[[int, torch.Tensor], Union[Tuple[bool, List[int]], torch.Tensor]], num_beams: int):
+        self._prefix_allowed_ids_or_submask_fn = prefix_allowed_ids_or_submask_fn
+        self._num_beams = num_beams
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        mask = torch.full_like(scores, -math.inf)
+        for batch_id, beam_sent in enumerate(input_ids.view(-1, self._num_beams, input_ids.shape[-1])):
+            for beam_id, sent in enumerate(beam_sent):
+                allowed_token_ids_or_submask = self._prefix_allowed_ids_or_submask_fn(batch_id, sent)
+                if isinstance(allowed_token_ids_or_submask, (tuple, list)):
+                    allowed_token_ids = allowed_token_ids_or_submask
+                    mask[batch_id * self._num_beams + beam_id, allowed_token_ids] = 0
+                else:
+                    assert isinstance(allowed_token_ids_or_submask, torch.Tensor)
+                    submask = allowed_token_ids_or_submask
+                    mask[batch_id * self._num_beams + beam_id] = submask
+
+        return scores + mask
+
+
+@deprecated
+class ConditionalPrefixConstrainedLogitsProcessor(transformers.LogitsProcessor):
     r"""
     [`LogitsProcessor`] that enforces constrained generation and is useful for prefix-conditioned constrained
     generation. This class is modified from `transformers.PrefixConstrainedLogitsProcessor`.

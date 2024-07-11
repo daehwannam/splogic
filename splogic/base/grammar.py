@@ -180,6 +180,10 @@ class Grammar:
     #     pass
 
     @abstractfunction
+    def get_num_all_token_ids(self):
+        raise NotImplementedError
+
+    @abstractfunction
     def iter_all_token_ids(self):
         raise NotImplementedError
 

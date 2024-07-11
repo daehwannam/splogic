@@ -159,6 +159,11 @@ class Seq2SeqGrammar(Grammar):
     #     pass
 
     @implement
+    def get_num_all_token_ids(self):
+        return len(self.lf_tokenizer)
+
+    @implement
+    @deprecated
     def iter_all_token_ids(self):
         return range(len(self.lf_tokenizer))
 

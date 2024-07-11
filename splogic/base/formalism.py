@@ -7,6 +7,9 @@ import copy
 import inspect
 from functools import lru_cache, cache
 from enum import Enum
+import math
+
+import torch
 
 from dhnamlib.pylib.structure import TreeStructure
 from dhnamlib.pylib.iteration import any_not_none, flatten, split_by_indices, chainelems, lastelem, not_none_valued_pairs
@@ -245,6 +248,7 @@ class Formalism:
                                     expr_dict={self.default_expr_key: ''})
         self.decoding_speed_optimization = decoding_speed_optimization
         if not decoding_speed_optimization:
+            self.get_allowed_submask = self._get_allowed_ids
             self.get_allowed_and_ids_pairs = self._get_allowed_and_ids_pairs__non_optimized
 
     @staticmethod
@@ -410,6 +414,33 @@ class Formalism:
         disallowed_ids = tuple(all_token_id_set.difference(allowed_ids))
         return disallowed_ids
 
+    @keyed_cache(lambda self, opened_action, current_num_args, type_to_candidates_dicts, vocab_size, device: (
+        opened_action.id, current_num_args, tuple(sorted(map(id, type_to_candidates_dicts))), vocab_size, device))
+    def get_allowed_submask(self, opened_action, current_num_args, type_to_candidates_dicts, vocab_size, device):
+        next_param_idx = self._get_next_param_idx(opened_action, current_num_args)
+        param_type = opened_action.param_types[next_param_idx]
+
+        optionally_reducible = Formalism._optionally_reducible(opened_action, current_num_args)
+        candidate_ids = self._get_candidates_from_cache(
+            param_type, type_to_candidates_dicts, optionally_reducible, to_id=True)
+
+        _submask = torch.full((1, vocab_size,), -math.inf, device=device)
+        _submask[0, candidate_ids] = 0
+        submask = _submask.view(-1)
+
+        return submask
+
+    def _get_allowed_ids(self, opened_action, current_num_args, type_to_candidates_dicts, vocab_size, device):
+        next_param_idx = self._get_next_param_idx(opened_action, current_num_args)
+        param_type = opened_action.param_types[next_param_idx]
+
+        optionally_reducible = Formalism._optionally_reducible(opened_action, current_num_args)
+        candidate_ids = self._get_candidates_from_cache(
+            param_type, type_to_candidates_dicts, optionally_reducible, to_id=True)
+
+        return candidate_ids
+
+    @deprecated
     def get_allowed_and_ids_pairs(self, opened_action, current_num_args, type_to_candidates_dicts, all_token_id_set, threshold):
         next_param_idx = self._get_next_param_idx(opened_action, current_num_args)
         param_type = opened_action.param_types[next_param_idx]
@@ -425,6 +456,7 @@ class Formalism:
                 param_type, type_to_candidates_dicts, optionally_reducible, all_token_id_set)
             return False, disallowed_ids
 
+    @deprecated
     def _get_allowed_and_ids_pairs__non_optimized(self, opened_action, current_num_args, type_to_candidates_dicts, all_token_id_set, threshold):
         next_param_idx = self._get_next_param_idx(opened_action, current_num_args)
         param_type = opened_action.param_types[next_param_idx]
@@ -686,7 +718,7 @@ class SearchState(metaclass=ABCMeta):
 
     @classmethod
     def _map_action_seq(cls, action_seq, *, initial_state=None, including_initial=False, including_candidate_ids,
-                        including_allowed_and_ids_pairs=False, verifying=False):
+                        including_allowed_ids=False, verifying=False):
         state = cls.create() if initial_state is None else initial_state
 
         if including_initial:
@@ -702,8 +734,8 @@ class SearchState(metaclass=ABCMeta):
             else:
                 candidate_action_ids = None
 
-            if including_allowed_and_ids_pairs:
-                allowed_and_ids_pairs = state.get_allowed_and_ids_pairs()
+            if including_allowed_ids:
+                allowed_and_ids_pairs = state.get_allowed_ids()
             else:
                 allowed_and_ids_pairs = None
 
@@ -722,7 +754,7 @@ class SearchState(metaclass=ABCMeta):
                 action_seq, initial_state=initial_state,
                 including_initial=including_initial,
                 including_candidate_ids=False,
-                including_allowed_and_ids_pairs=False,
+                including_allowed_ids=False,
                 verifying=verifying):
             yield info['state']
 
@@ -733,7 +765,7 @@ class SearchState(metaclass=ABCMeta):
                 action_seq, initial_state=initial_state,
                 including_initial=False,
                 including_candidate_ids=True,
-                including_allowed_and_ids_pairs=False,
+                including_allowed_ids=False,
                 verifying=verifying):
             yield info['candidate_action_ids']
 
@@ -744,7 +776,7 @@ class SearchState(metaclass=ABCMeta):
                 action_seq, initial_state=initial_state,
                 including_initial=False,
                 including_candidate_ids=False,
-                including_allowed_and_ids_pairs=True,
+                including_allowed_ids=True,
                 verifying=verifying):
             yield info['allowed_and_ids_pairs']
 
@@ -783,6 +815,36 @@ class SearchState(metaclass=ABCMeta):
 
         return action_ids
 
+    def get_allowed_ids_or_submask(self, device):
+        assert not self.using_arg_filter, 'arg_filter is not compatible with this function'
+
+        opened_tree, children = self.tree.get_opened_tree_children()
+        opened_action = opened_tree.value
+        if self.using_arg_candidate and opened_action.arg_candidate is not None:
+            action_ids = opened_action.arg_candidate(self.tree)
+            return action_ids
+        else:
+            num_all_token_ids = self.get_num_all_token_ids()
+            submask = self.formalism.get_allowed_submask(
+                opened_action, len(children), self.get_type_to_action_ids_dicts(), num_all_token_ids, device)
+            return submask
+
+    def get_allowed_ids(self):
+        opened_tree, children = self.tree.get_opened_tree_children()
+        opened_action = opened_tree.value
+        if self.using_arg_candidate and opened_action.arg_candidate is not None:
+            action_ids = opened_action.arg_candidate(self.tree)
+        else:
+            num_all_token_ids = self.get_num_all_token_ids()
+            action_ids = self.formalism._get_allowed_ids(
+                opened_action, len(children), self.get_type_to_action_ids_dicts(), num_all_token_ids)
+        assert not self.using_arg_filter
+        if self.using_arg_filter and opened_action.arg_filter is not None:
+            action_ids = tuple(opened_action.arg_filter(self.tree, action_ids))
+
+        return action_ids
+
+    @deprecated
     def get_allowed_and_ids_pairs(self):
         opened_tree, children = self.tree.get_opened_tree_children()
         opened_action = opened_tree.value
@@ -808,6 +870,10 @@ class SearchState(metaclass=ABCMeta):
 
     @abstractmethod
     def get_type_to_action_ids_dicts(self):
+        pass
+
+    @abstractmethod
+    def get_num_all_token_ids(self):
         pass
 
     @abstractmethod
@@ -896,6 +962,13 @@ def make_search_state_cls(
             return grammar.get_type_to_action_ids_dicts()
 
         @implement
+        @classmethod
+        @cache
+        def get_num_all_token_ids(cls):
+            return grammar.get_num_all_token_ids()
+
+        @implement
+        @deprecated
         @classmethod
         @cache
         def get_all_token_id_set(cls):

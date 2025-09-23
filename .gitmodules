@@ -1,3 +1,3 @@
 [submodule ".submodules/python-library"]
 	path = .submodules/python-library
-	url = https://github.com/daehwannam/python-library.git
+	url = https://github.com/daehwannam/python-library-for-splogic.git
